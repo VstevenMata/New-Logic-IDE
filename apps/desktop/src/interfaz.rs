@@ -3,12 +3,14 @@
 //!
 //! El código se compila en cada cambio y el lienzo dibuja el circuito al instante.
 
+use crate::ayuda;
 use eframe::egui::{
     self, Align2, Color32, CornerRadius, FontId, Frame, Margin, Pos2, Rect, RichText, Sense, Shape,
     Stroke, StrokeKind, Theme, Vec2, pos2, vec2,
 };
 use logicsm_core::Compuerta;
 use logicsm_core::netlist::{Netlist, Nodo, Tipo};
+use std::path::PathBuf;
 
 /// Colores de un tema. Hay dos: CLARO (pastel de index.html) y OSCURO.
 struct Paleta {
@@ -107,17 +109,42 @@ pub fn estilo(ctx: &egui::Context) {
     }
 }
 
-const EJEMPLO: &str = "circuit Demo {
-    in A, B, C;
-    out X, Y;
-
-    X = and(A, B);
-    Y = or(X, not(C));
+/// Lo que se hace después de confirmar que se pueden perder los cambios sin guardar
+#[derive(Clone, Copy)]
+enum Accion {
+    Nuevo,
+    Abrir,
+    Ejemplo(&'static str),
+    Salir,
 }
-";
+
+/// Ventanas del menú Ayuda
+#[derive(Clone, Copy)]
+enum Ventana {
+    Guia,
+    Atajos,
+    Actualizar,
+    Acerca,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Pestana {
+    Problemas,
+    Tabla,
+    Ondas,
+    Salida,
+}
+
+/// Aviso para Ejecutar y Paso a paso mientras no exista `clock`
+const SIN_RELOJ: &str = "Llega con clock. Por ahora la simulación corre sola al escribir.";
+
+const FILTRO: (&str, &[&str]) = ("Código LogicSM", &["SA", "sa"]);
 
 pub struct Interfaz {
     codigo: String,
+    /// El código tal como está en el archivo, para saber si hay cambios sin guardar
+    guardado: String,
+    ruta: Option<PathBuf>,
     /// Último circuito que compiló; se queda mientras el código tiene errores.
     red: Option<Netlist>,
     problemas: Vec<String>,
@@ -126,19 +153,51 @@ pub struct Interfaz {
     /// Valor de cada nodo de `red` (guarda la memoria de los flip-flops)
     valores: Vec<bool>,
     estable: bool,
+    /// Mensajes de la pestaña Salida (archivos abiertos, guardados, errores)
+    salida: Vec<String>,
+    pestana: Pestana,
+    ver_proyecto: bool,
+    ver_senales: bool,
+    ver_inferior: bool,
+    ventana: Option<Ventana>,
+    /// Acción esperando confirmación porque hay cambios sin guardar
+    confirmar: Option<Accion>,
+    /// Ya se confirmó la salida: no volver a preguntar al cerrar
+    saliendo: bool,
+    /// Evento del menú Editar (deshacer, copiar…) que recibe el editor
+    para_editor: Option<egui::Event>,
+    logo: egui::TextureHandle,
 }
 
 impl Interfaz {
-    pub fn nueva() -> Self {
+    pub fn nueva(ctx: &egui::Context) -> Self {
+        let icono = eframe::icon_data::from_png_bytes(crate::LOGO)
+            .expect("assets/logo.png es un PNG válido");
+        let imagen = egui::ColorImage::from_rgba_unmultiplied(
+            [icono.width as usize, icono.height as usize],
+            &icono.rgba,
+        );
         let mut s = Self {
-            codigo: EJEMPLO.into(),
+            codigo: String::new(),
+            guardado: String::new(),
+            ruta: None,
             red: None,
             problemas: Vec::new(),
             entradas: Vec::new(),
             valores: Vec::new(),
             estable: true,
+            salida: Vec::new(),
+            pestana: Pestana::Problemas,
+            ver_proyecto: true,
+            ver_senales: true,
+            ver_inferior: true,
+            ventana: None,
+            confirmar: None,
+            saliendo: false,
+            para_editor: None,
+            logo: ctx.load_texture("logo", imagen, egui::TextureOptions::LINEAR),
         };
-        s.compilar();
+        s.cargar(ayuda::EJEMPLOS[0].1.into(), None);
         s
     }
 
@@ -166,10 +225,225 @@ impl Interfaz {
             }
         }
     }
+
+    /// Pone un código nuevo en el editor (archivo abierto, ejemplo o plantilla)
+    fn cargar(&mut self, texto: String, ruta: Option<PathBuf>) {
+        self.guardado = texto.clone();
+        self.codigo = texto;
+        self.ruta = ruta;
+        self.red = None;
+        self.entradas.clear();
+        self.compilar();
+    }
+
+    fn sin_guardar(&self) -> bool {
+        self.codigo != self.guardado
+    }
+
+    /// Mensaje en la pestaña Salida, que se muestra
+    fn aviso(&mut self, mensaje: String) {
+        self.salida.push(mensaje);
+        self.pestana = Pestana::Salida;
+        self.ver_inferior = true;
+    }
+
+    /// Hace la acción, o primero pregunta si hay cambios sin guardar
+    fn pedir(&mut self, ctx: &egui::Context, accion: Accion) {
+        if self.sin_guardar() {
+            self.confirmar = Some(accion);
+        } else {
+            self.hacer(ctx, accion);
+        }
+    }
+
+    fn hacer(&mut self, ctx: &egui::Context, accion: Accion) {
+        match accion {
+            Accion::Nuevo => self.cargar(ayuda::PLANTILLA.into(), None),
+            Accion::Ejemplo(codigo) => self.cargar(codigo.into(), None),
+            Accion::Abrir => {
+                let Some(ruta) = rfd::FileDialog::new()
+                    .add_filter(FILTRO.0, FILTRO.1)
+                    .pick_file()
+                else {
+                    return;
+                };
+                match std::fs::read_to_string(&ruta) {
+                    Ok(texto) => {
+                        self.salida.push(format!("Abierto: {}", ruta.display()));
+                        self.cargar(texto, Some(ruta));
+                    }
+                    Err(e) => self.aviso(format!("No se pudo abrir {}: {e}", ruta.display())),
+                }
+            }
+            Accion::Salir => {
+                self.saliendo = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
+    }
+
+    /// Guarda en el archivo actual, o pregunta dónde (`como` o si nunca se guardó).
+    /// Devuelve `false` si no se guardó.
+    fn guardar(&mut self, como: bool) -> bool {
+        let ruta = match &self.ruta {
+            Some(ruta) if !como => ruta.clone(),
+            _ => {
+                let nombre = self.ruta.as_ref().and_then(|r| r.file_name()).map_or_else(
+                    || "circuito.SA".to_string(),
+                    |n| n.to_string_lossy().into_owned(),
+                );
+                let Some(mut ruta) = rfd::FileDialog::new()
+                    .add_filter(FILTRO.0, FILTRO.1)
+                    .set_file_name(nombre)
+                    .save_file()
+                else {
+                    return false;
+                };
+                if ruta.extension().is_none() {
+                    ruta.set_extension("SA");
+                }
+                ruta
+            }
+        };
+        match std::fs::write(&ruta, &self.codigo) {
+            Ok(()) => {
+                self.guardado = self.codigo.clone();
+                self.salida.push(format!("Guardado: {}", ruta.display()));
+                self.ruta = Some(ruta);
+                true
+            }
+            Err(e) => {
+                self.aviso(format!("No se pudo guardar {}: {e}", ruta.display()));
+                false
+            }
+        }
+    }
+
+    /// Entradas en 0 y se borra la memoria de los flip-flops
+    fn reiniciar(&mut self) {
+        self.entradas.fill(false);
+        self.valores.clear();
+    }
+
+    fn atajos(&mut self, ctx: &egui::Context) {
+        use egui::{Key, KeyboardShortcut, Modifiers};
+        let tecla = |m: Modifiers, k: Key| {
+            ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(m, k)))
+        };
+        let ctrl = Modifiers::COMMAND;
+        // Primero la versión con Shift: Ctrl+S también aceptaría Ctrl+Shift+S
+        if tecla(ctrl | Modifiers::SHIFT, Key::S) {
+            self.guardar(true);
+        } else if tecla(ctrl, Key::S) {
+            self.guardar(false);
+        }
+        if tecla(ctrl, Key::N) {
+            self.pedir(ctx, Accion::Nuevo);
+        }
+        if tecla(ctrl, Key::O) {
+            self.pedir(ctx, Accion::Abrir);
+        }
+        if tecla(ctrl, Key::Q) {
+            self.pedir(ctx, Accion::Salir);
+        }
+        if tecla(ctrl, Key::B) {
+            self.ver_proyecto = !self.ver_proyecto;
+        }
+        if tecla(ctrl, Key::J) {
+            self.ver_inferior = !self.ver_inferior;
+        }
+        if tecla(ctrl | Modifiers::SHIFT, Key::F5) {
+            self.reiniciar();
+        }
+        if tecla(Modifiers::NONE, Key::F1) {
+            self.ventana = Some(Ventana::Guia);
+        }
+        // Cerrar con la X de la ventana también pregunta
+        if ctx.input(|i| i.viewport().close_requested()) && !self.saliendo && self.sin_guardar() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.confirmar = Some(Accion::Salir);
+        }
+    }
+
+    /// Diálogo "Hay cambios sin guardar"
+    fn confirmacion(&mut self, ctx: &egui::Context) {
+        let Some(accion) = self.confirmar else {
+            return;
+        };
+        enum Respuesta {
+            Guardar,
+            Descartar,
+            Cancelar,
+        }
+        let mut respuesta = None;
+        let r = egui::Modal::new(egui::Id::unique("confirmar")).show(ctx, |ui| {
+            ui.set_width(340.0);
+            ui.label(RichText::new("Hay cambios sin guardar").size(14.0).strong());
+            ui.add_space(4.0);
+            ui.label("¿Quieres guardarlos antes de continuar?");
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                if ui.button("Guardar").clicked() {
+                    respuesta = Some(Respuesta::Guardar);
+                }
+                if ui.button("No guardar").clicked() {
+                    respuesta = Some(Respuesta::Descartar);
+                }
+                if ui.button("Cancelar").clicked() {
+                    respuesta = Some(Respuesta::Cancelar);
+                }
+            });
+        });
+        if r.should_close() && respuesta.is_none() {
+            respuesta = Some(Respuesta::Cancelar);
+        }
+        let Some(respuesta) = respuesta else {
+            return;
+        };
+        self.confirmar = None;
+        let seguir = match respuesta {
+            Respuesta::Guardar => self.guardar(false),
+            Respuesta::Descartar => true,
+            Respuesta::Cancelar => false,
+        };
+        if seguir {
+            self.hacer(ctx, accion);
+        }
+    }
+
+    fn ventanas(&mut self, ctx: &egui::Context) {
+        let Some(ventana) = self.ventana else {
+            return;
+        };
+        let titulo = match ventana {
+            Ventana::Guia => "Guía del lenguaje",
+            Ventana::Atajos => "Atajos de teclado",
+            Ventana::Actualizar => "Buscar actualizaciones",
+            Ventana::Acerca => "Acerca de LogicSM",
+        };
+        let mut abierta = true;
+        egui::Window::new(titulo)
+            .open(&mut abierta)
+            .collapsible(false)
+            .default_size([560.0, 520.0])
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| match ventana {
+                    Ventana::Guia => ayuda::guia(ui),
+                    Ventana::Atajos => ayuda::atajos(ui),
+                    Ventana::Actualizar => ayuda::actualizar(ui),
+                    Ventana::Acerca => ayuda::acerca(ui, &self.logo),
+                });
+            });
+        if !abierta {
+            self.ventana = None;
+        }
+    }
 }
 
 impl eframe::App for Interfaz {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        self.atajos(&ctx);
         if let Some(red) = &self.red {
             self.estable = logicsm_sim::simular(red, &mut self.valores, &self.entradas);
         }
@@ -182,30 +456,36 @@ impl eframe::App for Interfaz {
                     .fill(c.panel)
                     .inner_margin(Margin::symmetric(14, 0)),
             )
-            .show(ui, barra_superior);
-        egui::Panel::left("proyecto")
-            .exact_size(174.0)
-            .resizable(false)
-            .frame(
-                Frame::new()
-                    .fill(c.panel)
-                    .inner_margin(Margin::symmetric(14, 15)),
-            )
-            .show(ui, proyecto);
-        egui::Panel::right("senales")
-            .exact_size(222.0)
-            .resizable(false)
-            .frame(
-                Frame::new()
-                    .fill(c.panel)
-                    .inner_margin(Margin::symmetric(14, 15)),
-            )
-            .show(ui, |ui| self.senales(ui));
-        egui::Panel::bottom("pestanas")
-            .exact_size(166.0)
-            .resizable(false)
-            .frame(Frame::new().fill(c.panel))
-            .show(ui, |ui| self.pestanas(ui));
+            .show(ui, |ui| self.barra_superior(ui));
+        if self.ver_proyecto {
+            egui::Panel::left("proyecto")
+                .exact_size(174.0)
+                .resizable(false)
+                .frame(
+                    Frame::new()
+                        .fill(c.panel)
+                        .inner_margin(Margin::symmetric(14, 15)),
+                )
+                .show(ui, |ui| self.proyecto(ui));
+        }
+        if self.ver_senales {
+            egui::Panel::right("senales")
+                .exact_size(222.0)
+                .resizable(false)
+                .frame(
+                    Frame::new()
+                        .fill(c.panel)
+                        .inner_margin(Margin::symmetric(14, 15)),
+                )
+                .show(ui, |ui| self.senales(ui));
+        }
+        if self.ver_inferior {
+            egui::Panel::bottom("pestanas")
+                .exact_size(166.0)
+                .resizable(false)
+                .frame(Frame::new().fill(c.panel))
+                .show(ui, |ui| self.pestanas(ui));
+        }
         egui::Panel::left("codigo")
             .default_size(420.0)
             .resizable(true)
@@ -214,104 +494,230 @@ impl eframe::App for Interfaz {
         egui::CentralPanel::default()
             .frame(Frame::new().fill(c.fondo))
             .show(ui, |ui| self.lienzo(ui));
+        self.ventanas(&ctx);
+        self.confirmacion(&ctx);
     }
 }
 
-/// Nombre y menú a la izquierda, controles de simulación junto a ellos y el tema a la derecha
-fn barra_superior(ui: &mut egui::Ui) {
-    ui.horizontal_centered(|ui| {
-        ui.label(RichText::new("LogicSM").size(14.0).strong());
-        ui.add_space(6.0);
-        menu(ui);
-        ui.add_space(6.0);
-        ui.separator();
-        ui.add_space(6.0);
-        boton(ui, "Ejecutar", Icono::Ejecutar, true);
-        boton(ui, "Paso a paso", Icono::Paso, false);
-        boton(ui, "Reiniciar", Icono::Reiniciar, false);
-
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let oscuro = ui.ctx().theme() == Theme::Dark;
-            let (texto, icono, otro) = if oscuro {
-                ("Claro", Icono::Sol, Theme::Light)
-            } else {
-                ("Oscuro", Icono::Luna, Theme::Dark)
-            };
-            if boton(ui, texto, icono, false).clicked() {
-                ui.ctx().set_theme(otro);
-            }
-        });
-    });
-}
-
 /// Formatos de exportación (menú Archivo y botón Exportar de Proyecto)
+// ponytail: deshabilitados hasta que exista cada exportador
 const FORMATOS: [&str; 3] = ["Imagen (PNG)", "Tabla de verdad (CSV)", "Verilog (.v)"];
 
-/// Menú principal al estilo de VS Code. Por ahora solo visual: las opciones no hacen nada.
-fn menu(ui: &mut egui::Ui) {
-    let opcion = |ui: &mut egui::Ui, texto: &str, atajo: &str| {
-        ui.add(egui::Button::new(texto).shortcut_text(atajo));
-    };
-    let deshabilitada = |ui: &mut egui::Ui, texto: &str| {
-        ui.add_enabled(false, egui::Button::new(texto));
-    };
+impl Interfaz {
+    /// Logo, nombre y menú a la izquierda, controles de simulación y el tema a la derecha
+    fn barra_superior(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_centered(|ui| {
+            ui.image((self.logo.id(), vec2(22.0, 22.0)));
+            ui.label(RichText::new("LogicSM").size(14.0).strong());
+            ui.add_space(6.0);
+            self.menu(ui);
+            ui.add_space(6.0);
+            ui.separator();
+            ui.add_space(6.0);
+            boton(ui, "Ejecutar", Icono::Ejecutar, true).on_hover_text(SIN_RELOJ);
+            boton(ui, "Paso a paso", Icono::Paso, false).on_hover_text(SIN_RELOJ);
+            if boton(ui, "Reiniciar", Icono::Reiniciar, false)
+                .on_hover_text("Pone las entradas en 0 y borra la memoria")
+                .clicked()
+            {
+                self.reiniciar();
+            }
 
-    ui.menu_button("Archivo", |ui| {
-        opcion(ui, "Nuevo proyecto", "Ctrl+N");
-        opcion(ui, "Abrir…", "Ctrl+O");
-        ui.menu_button("Abrir reciente", |ui| {
-            deshabilitada(ui, "Sin proyectos recientes")
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let oscuro = ui.ctx().theme() == Theme::Dark;
+                let (texto, icono, otro) = if oscuro {
+                    ("Claro", Icono::Sol, Theme::Light)
+                } else {
+                    ("Oscuro", Icono::Luna, Theme::Dark)
+                };
+                if boton(ui, texto, icono, false).clicked() {
+                    ui.ctx().set_theme(otro);
+                }
+            });
         });
-        ui.separator();
-        opcion(ui, "Guardar", "Ctrl+S");
-        opcion(ui, "Guardar como…", "Ctrl+Shift+S");
-        ui.menu_button("Exportar", |ui| {
-            for formato in FORMATOS {
-                deshabilitada(ui, formato);
+    }
+
+    /// Menú principal al estilo de VS Code
+    fn menu(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let opcion = |ui: &mut egui::Ui, texto: &str, atajo: &str| {
+            ui.add(egui::Button::new(texto).shortcut_text(atajo))
+                .clicked()
+        };
+        let tecla = |key| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        };
+
+        ui.menu_button("Archivo", |ui| {
+            if opcion(ui, "Nuevo", "Ctrl+N") {
+                self.pedir(&ctx, Accion::Nuevo);
+            }
+            if opcion(ui, "Abrir…", "Ctrl+O") {
+                self.pedir(&ctx, Accion::Abrir);
+            }
+            ui.separator();
+            if opcion(ui, "Guardar", "Ctrl+S") {
+                self.guardar(false);
+            }
+            if opcion(ui, "Guardar como…", "Ctrl+Shift+S") {
+                self.guardar(true);
+            }
+            ui.menu_button("Exportar", |ui| {
+                for formato in FORMATOS {
+                    ui.add_enabled(false, egui::Button::new(formato));
+                }
+            });
+            ui.separator();
+            if opcion(ui, "Salir", "Ctrl+Q") {
+                self.pedir(&ctx, Accion::Salir);
             }
         });
-        ui.separator();
-        opcion(ui, "Salir", "Ctrl+Q");
-    });
-    ui.menu_button("Editar", |ui| {
-        opcion(ui, "Deshacer", "Ctrl+Z");
-        opcion(ui, "Rehacer", "Ctrl+Y");
-        ui.separator();
-        opcion(ui, "Cortar", "Ctrl+X");
-        opcion(ui, "Copiar", "Ctrl+C");
-        opcion(ui, "Pegar", "Ctrl+V");
-        ui.separator();
-        opcion(ui, "Buscar", "Ctrl+F");
-        opcion(ui, "Reemplazar", "Ctrl+H");
-    });
-    ui.menu_button("Ver", |ui| {
-        opcion(ui, "Acercar", "Ctrl++");
-        opcion(ui, "Alejar", "Ctrl+-");
-        opcion(ui, "Ajustar el circuito", "Ctrl+0");
-        ui.separator();
-        opcion(ui, "Panel de proyecto", "Ctrl+B");
-        opcion(ui, "Entradas y salidas", "");
-        opcion(ui, "Panel inferior", "Ctrl+J");
-    });
-    ui.menu_button("Simulación", |ui| {
-        opcion(ui, "Ejecutar", "F5");
-        opcion(ui, "Paso a paso", "F10");
-        opcion(ui, "Reiniciar", "Ctrl+Shift+F5");
-        ui.separator();
-        opcion(ui, "Tabla de verdad", "");
-        opcion(ui, "Ondas", "");
-    });
-    ui.menu_button("Ayuda", |ui| {
-        opcion(ui, "Guía del lenguaje", "F1");
-        opcion(ui, "Ejemplos", "");
-        opcion(ui, "Atajos de teclado", "");
-        ui.separator();
-        opcion(ui, "Buscar actualizaciones", "");
-        opcion(ui, "Reportar un problema", "");
-        ui.separator();
-        // La versión instalada, para confirmar que logicsm update funcionó
-        deshabilitada(ui, concat!("LogicSM ", env!("CARGO_PKG_VERSION")));
-    });
+        ui.menu_button("Editar", |ui| {
+            if opcion(ui, "Deshacer", "Ctrl+Z") {
+                self.para_editor = Some(tecla(egui::Key::Z));
+            }
+            if opcion(ui, "Rehacer", "Ctrl+Y") {
+                self.para_editor = Some(tecla(egui::Key::Y));
+            }
+            ui.separator();
+            if opcion(ui, "Cortar", "Ctrl+X") {
+                self.para_editor = Some(egui::Event::Cut);
+            }
+            if opcion(ui, "Copiar", "Ctrl+C") {
+                self.para_editor = Some(egui::Event::Copy);
+            }
+            if opcion(ui, "Pegar", "Ctrl+V") {
+                match arboard::Clipboard::new().and_then(|mut p| p.get_text()) {
+                    Ok(texto) => self.para_editor = Some(egui::Event::Paste(texto)),
+                    Err(e) => self.aviso(format!("No se pudo leer el portapapeles: {e}")),
+                }
+            }
+            ui.separator();
+            if opcion(ui, "Seleccionar todo", "Ctrl+A") {
+                self.para_editor = Some(tecla(egui::Key::A));
+            }
+        });
+        ui.menu_button("Ver", |ui| {
+            // Igual que en VS Code, el zoom es de toda la ventana
+            if opcion(ui, "Acercar", "Ctrl++") {
+                ctx.set_zoom_factor((ctx.zoom_factor() + 0.1).min(3.0));
+            }
+            if opcion(ui, "Alejar", "Ctrl+-") {
+                ctx.set_zoom_factor((ctx.zoom_factor() - 0.1).max(0.5));
+            }
+            if opcion(ui, "Tamaño normal", "Ctrl+0") {
+                ctx.set_zoom_factor(1.0);
+            }
+            ui.separator();
+            ui.checkbox(&mut self.ver_proyecto, "Panel de proyecto  (Ctrl+B)");
+            ui.checkbox(&mut self.ver_senales, "Entradas y salidas");
+            ui.checkbox(&mut self.ver_inferior, "Panel inferior  (Ctrl+J)");
+        });
+        ui.menu_button("Simulación", |ui| {
+            ui.add_enabled(false, egui::Button::new("Ejecutar").shortcut_text("F5"))
+                .on_disabled_hover_text(SIN_RELOJ);
+            ui.add_enabled(false, egui::Button::new("Paso a paso").shortcut_text("F10"))
+                .on_disabled_hover_text(SIN_RELOJ);
+            if opcion(ui, "Reiniciar", "Ctrl+Shift+F5") {
+                self.reiniciar();
+            }
+            ui.separator();
+            if opcion(ui, "Tabla de verdad", "") {
+                self.pestana = Pestana::Tabla;
+                self.ver_inferior = true;
+            }
+            if opcion(ui, "Ondas", "") {
+                self.pestana = Pestana::Ondas;
+                self.ver_inferior = true;
+            }
+        });
+        ui.menu_button("Ayuda", |ui| {
+            if opcion(ui, "Guía del lenguaje", "F1") {
+                self.ventana = Some(Ventana::Guia);
+            }
+            ui.menu_button("Ejemplos", |ui| {
+                for (nombre, codigo) in ayuda::EJEMPLOS {
+                    if ui.button(nombre).clicked() {
+                        self.pedir(&ctx, Accion::Ejemplo(codigo));
+                    }
+                }
+            });
+            if opcion(ui, "Atajos de teclado", "") {
+                self.ventana = Some(Ventana::Atajos);
+            }
+            ui.separator();
+            if opcion(ui, "Buscar actualizaciones", "") {
+                self.ventana = Some(Ventana::Actualizar);
+            }
+            if opcion(ui, "Reportar un problema", "") {
+                ctx.open_url(egui::OpenUrl::new_tab(concat!(
+                    env!("CARGO_PKG_REPOSITORY"),
+                    "/issues/new"
+                )));
+            }
+            ui.separator();
+            if opcion(ui, "Acerca de LogicSM", "") {
+                self.ventana = Some(Ventana::Acerca);
+            }
+        });
+    }
+
+    fn proyecto(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        titulo(ui, "Proyecto");
+        let ancho = (ui.available_width() - ui.spacing().item_spacing.x) / 2.0;
+        let accion = |ui: &mut egui::Ui, texto: &str| {
+            ui.add(egui::Button::new(RichText::new(texto).size(12.0)).min_size(vec2(ancho, 28.0)))
+        };
+        ui.horizontal(|ui| {
+            if accion(ui, "Nuevo").clicked() {
+                self.pedir(&ctx, Accion::Nuevo);
+            }
+            if accion(ui, "Abrir").clicked() {
+                self.pedir(&ctx, Accion::Abrir);
+            }
+        });
+        ui.horizontal(|ui| {
+            if accion(ui, "Guardar").clicked() {
+                self.guardar(false);
+            }
+            let exportar = accion(ui, "Exportar ▾");
+            egui::Popup::menu(&exportar).show(|ui| {
+                for formato in FORMATOS {
+                    ui.add_enabled(false, egui::Button::new(formato));
+                }
+            });
+        });
+        ui.add_space(14.0);
+        match &self.ruta {
+            Some(ruta) => {
+                let nombre = ruta.file_name().unwrap_or_default().to_string_lossy();
+                ui.label(RichText::new(nombre).size(12.0).strong());
+                if let Some(carpeta) = ruta.parent() {
+                    vacio(ui, &carpeta.display().to_string());
+                }
+            }
+            None => vacio(ui, "Archivo sin guardar."),
+        }
+        if self.sin_guardar() {
+            ui.add_space(4.0);
+            vacio(ui, "● Cambios sin guardar");
+        }
+    }
+
+    /// Nombre del archivo para la cabecera del editor
+    fn nombre_archivo(&self) -> String {
+        let nombre = self.ruta.as_ref().and_then(|r| r.file_name()).map_or_else(
+            || "sin título".to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        );
+        let marca = if self.sin_guardar() { " ●" } else { "" };
+        format!("Código — {nombre}{marca}")
+    }
 }
 
 /// Título de sección ("Proyecto", "Entradas"…)
@@ -323,30 +729,6 @@ fn titulo(ui: &mut egui::Ui, texto: &str) {
 /// Texto tenue para secciones vacías
 fn vacio(ui: &mut egui::Ui, texto: &str) {
     ui.label(RichText::new(texto).size(11.5).color(paleta(ui).tenue));
-}
-
-/// Acciones del proyecto. Por ahora no hacen nada: llegan con el manejo de archivos.
-fn proyecto(ui: &mut egui::Ui) {
-    titulo(ui, "Proyecto");
-    let ancho = (ui.available_width() - ui.spacing().item_spacing.x) / 2.0;
-    let accion = |ui: &mut egui::Ui, texto: &str| {
-        ui.add(egui::Button::new(RichText::new(texto).size(12.0)).min_size(vec2(ancho, 28.0)))
-    };
-    ui.horizontal(|ui| {
-        accion(ui, "Nuevo");
-        accion(ui, "Abrir");
-    });
-    ui.horizontal(|ui| {
-        accion(ui, "Guardar");
-        let exportar = accion(ui, "Exportar ▾");
-        egui::Popup::menu(&exportar).show(|ui| {
-            for formato in FORMATOS {
-                ui.add_enabled(false, egui::Button::new(formato));
-            }
-        });
-    });
-    ui.add_space(14.0);
-    vacio(ui, "Abre una carpeta o crea un proyecto nuevo.");
 }
 
 impl Interfaz {
@@ -383,10 +765,17 @@ impl Interfaz {
     }
 
     fn editor(&mut self, ui: &mut egui::Ui) {
-        cabecera(ui, "Código");
+        cabecera(ui, &self.nombre_archivo());
+        let id = egui::Id::unique("editor");
+        // Lo que pidió el menú Editar: se le da el foco al editor y se le pasa el evento
+        if let Some(evento) = self.para_editor.take() {
+            ui.memory_mut(|m| m.request_focus(id));
+            ui.input_mut(|i| i.events.push(evento));
+        }
         egui::ScrollArea::vertical().show(ui, |ui| {
             let r = ui.add(
                 egui::TextEdit::multiline(&mut self.codigo)
+                    .id(id)
                     .code_editor()
                     .desired_width(f32::INFINITY)
                     .desired_rows(40),
@@ -451,20 +840,37 @@ impl Interfaz {
             [rect.left_bottom(), rect.right_bottom()],
             Stroke::new(1.0, c.linea),
         );
+        let mut problemas = self.problemas.clone();
+        if !self.estable {
+            problemas.push("El circuito oscila: nunca llega a un valor estable.".into());
+        }
+        let titulo_problemas = match problemas.len() {
+            0 => "Problemas".to_string(),
+            n => format!("Problemas ({n})"),
+        };
         let mut x = rect.left() + 15.0;
-        for (i, nombre) in ["Problemas", "Tabla de verdad", "Ondas", "Salida"]
-            .into_iter()
-            .enumerate()
-        {
-            let color = if i == 0 { c.tinta } else { c.tenue };
+        for (pestana, nombre) in [
+            (Pestana::Problemas, titulo_problemas.as_str()),
+            (Pestana::Tabla, "Tabla de verdad"),
+            (Pestana::Ondas, "Ondas"),
+            (Pestana::Salida, "Salida"),
+        ] {
+            let activa = self.pestana == pestana;
             let r = p.text(
                 pos2(x, rect.center().y),
                 Align2::LEFT_CENTER,
                 nombre,
                 FontId::proportional(12.0),
-                color,
+                if activa { c.tinta } else { c.tenue },
             );
-            if i == 0 {
+            let zona = Rect::from_x_y_ranges(r.x_range().expand(6.0), rect.y_range());
+            if ui
+                .interact(zona, ui.scope_id().with(nombre), Sense::click())
+                .clicked()
+            {
+                self.pestana = pestana;
+            }
+            if activa {
                 let y = rect.bottom() - 1.0;
                 p.line_segment(
                     [pos2(r.left(), y), pos2(r.right(), y)],
@@ -474,23 +880,90 @@ impl Interfaz {
             x = r.right() + 21.0;
         }
         ui.add_space(10.0);
-        let mut problemas = self.problemas.clone();
-        if !self.estable {
-            problemas.push("El circuito oscila: nunca llega a un valor estable.".into());
-        }
         egui::ScrollArea::vertical().show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.add_space(15.0);
-                ui.vertical(|ui| {
-                    if problemas.is_empty() {
-                        vacio(ui, "Sin problemas.");
+                ui.vertical(|ui| match self.pestana {
+                    Pestana::Problemas => {
+                        if problemas.is_empty() {
+                            vacio(ui, "Sin problemas.");
+                        }
+                        for problema in &problemas {
+                            ui.label(RichText::new(problema).size(12.0).monospace());
+                        }
                     }
-                    for problema in &problemas {
-                        ui.label(RichText::new(problema).size(12.0).monospace());
+                    Pestana::Tabla => self.tabla_de_verdad(ui),
+                    Pestana::Ondas => vacio(ui, "Las ondas llegan con clock y probe."),
+                    Pestana::Salida => {
+                        if self.salida.is_empty() {
+                            vacio(ui, "Sin mensajes.");
+                        }
+                        for mensaje in &self.salida {
+                            ui.label(RichText::new(mensaje).size(12.0).monospace());
+                        }
                     }
                 });
             });
         });
+    }
+
+    /// Todas las combinaciones de entradas y lo que vale cada salida
+    // ponytail: cada fila parte de 0, así que en circuitos con memoria no muestra el estado guardado
+    fn tabla_de_verdad(&self, ui: &mut egui::Ui) {
+        let c = paleta(ui);
+        let Some(red) = &self.red else {
+            vacio(ui, "Escribe un circuito para ver su tabla de verdad.");
+            return;
+        };
+        let entradas: Vec<&str> = red
+            .nodos
+            .iter()
+            .filter_map(|n| match &n.tipo {
+                Tipo::Entrada(nombre) => Some(nombre.as_str()),
+                _ => None,
+            })
+            .collect();
+        let salidas: Vec<(usize, &str)> = red
+            .nodos
+            .iter()
+            .enumerate()
+            .filter_map(|(i, n)| match &n.tipo {
+                Tipo::Salida(nombre) => Some((i, nombre.as_str())),
+                _ => None,
+            })
+            .collect();
+        let n = entradas.len();
+        if n > 8 {
+            vacio(ui, "Con más de 8 entradas la tabla sería demasiado larga.");
+            return;
+        }
+        let bit = |v: bool| RichText::new(if v { "1" } else { "0" }).monospace();
+        egui::Grid::new("tabla_de_verdad")
+            .striped(true)
+            .spacing(vec2(18.0, 3.0))
+            .show(ui, |ui| {
+                for nombre in &entradas {
+                    ui.label(RichText::new(*nombre).monospace().strong());
+                }
+                for (_, nombre) in &salidas {
+                    ui.label(RichText::new(*nombre).monospace().strong().color(c.lavanda));
+                }
+                ui.end_row();
+                let mut valores = Vec::new();
+                for fila in 0..1usize << n {
+                    let e: Vec<bool> = (0..n).map(|i| (fila >> (n - 1 - i)) & 1 == 1).collect();
+                    valores.clear();
+                    logicsm_sim::simular(red, &mut valores, &e);
+                    for &v in &e {
+                        ui.label(bit(v));
+                    }
+                    for &(i, _) in &salidas {
+                        let v = valores[i];
+                        ui.label(bit(v).color(if v { c.uno } else { c.tenue }));
+                    }
+                    ui.end_row();
+                }
+            });
     }
 }
 
