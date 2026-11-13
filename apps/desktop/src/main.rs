@@ -34,8 +34,7 @@ fn ventana() -> eframe::Result {
             // Igual al nombre de logicsm.desktop: así Linux (Wayland) le pone el ícono correcto
             .with_app_id("logicsm")
             .with_icon(
-                eframe::icon_data::from_png_bytes(LOGO)
-                    .expect("assets/logo.png es un PNG válido"),
+                eframe::icon_data::from_png_bytes(LOGO).expect("assets/logo.png es un PNG válido"),
             )
             .with_inner_size([1280.0, 800.0])
             .with_min_inner_size([900.0, 560.0]),

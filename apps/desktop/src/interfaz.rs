@@ -3,11 +3,11 @@
 //!
 //! El código se compila en cada cambio y el lienzo dibuja el circuito al instante.
 
+use crate::ayuda;
 use eframe::egui::{
     self, Align2, Color32, CornerRadius, FontId, Frame, Margin, Pos2, Rect, RichText, Sense, Shape,
     Stroke, StrokeKind, Theme, Vec2, pos2, vec2,
 };
-use crate::ayuda;
 use logicsm_core::Compuerta;
 use logicsm_core::netlist::{Netlist, Nodo, Tipo};
 use std::path::PathBuf;
@@ -359,8 +359,7 @@ impl Interfaz {
             self.ventana = Some(Ventana::Guia);
         }
         // Cerrar con la X de la ventana también pregunta
-        if ctx.input(|i| i.viewport().close_requested()) && !self.saliendo && self.sin_guardar()
-        {
+        if ctx.input(|i| i.viewport().close_requested()) && !self.saliendo && self.sin_guardar() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.confirmar = Some(Accion::Salir);
         }
