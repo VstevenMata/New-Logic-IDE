@@ -134,10 +134,12 @@ impl eframe::App for Interfaz {
     }
 }
 
-/// Nombre a la izquierda, controles de simulación junto a él y el tema a la derecha
+/// Nombre y menú a la izquierda, controles de simulación junto a ellos y el tema a la derecha
 fn barra_superior(ui: &mut egui::Ui) {
     ui.horizontal_centered(|ui| {
         ui.label(RichText::new("LogicSM").size(14.0).strong());
+        ui.add_space(6.0);
+        menu(ui);
         ui.add_space(6.0);
         ui.separator();
         ui.add_space(6.0);
@@ -156,6 +158,74 @@ fn barra_superior(ui: &mut egui::Ui) {
                 ui.ctx().set_theme(otro);
             }
         });
+    });
+}
+
+/// Formatos de exportación (menú Archivo y botón Exportar de Proyecto)
+const FORMATOS: [&str; 3] = ["Imagen (PNG)", "Tabla de verdad (CSV)", "Verilog (.v)"];
+
+/// Menú principal al estilo de VS Code. Por ahora solo visual: las opciones no hacen nada.
+fn menu(ui: &mut egui::Ui) {
+    let opcion = |ui: &mut egui::Ui, texto: &str, atajo: &str| {
+        ui.add(egui::Button::new(texto).shortcut_text(atajo));
+    };
+    let deshabilitada = |ui: &mut egui::Ui, texto: &str| {
+        ui.add_enabled(false, egui::Button::new(texto));
+    };
+
+    ui.menu_button("Archivo", |ui| {
+        opcion(ui, "Nuevo proyecto", "Ctrl+N");
+        opcion(ui, "Abrir…", "Ctrl+O");
+        ui.menu_button("Abrir reciente", |ui| deshabilitada(ui, "Sin proyectos recientes"));
+        ui.separator();
+        opcion(ui, "Guardar", "Ctrl+S");
+        opcion(ui, "Guardar como…", "Ctrl+Shift+S");
+        ui.menu_button("Exportar", |ui| {
+            for formato in FORMATOS {
+                deshabilitada(ui, formato);
+            }
+        });
+        ui.separator();
+        opcion(ui, "Salir", "Ctrl+Q");
+    });
+    ui.menu_button("Editar", |ui| {
+        opcion(ui, "Deshacer", "Ctrl+Z");
+        opcion(ui, "Rehacer", "Ctrl+Y");
+        ui.separator();
+        opcion(ui, "Cortar", "Ctrl+X");
+        opcion(ui, "Copiar", "Ctrl+C");
+        opcion(ui, "Pegar", "Ctrl+V");
+        ui.separator();
+        opcion(ui, "Buscar", "Ctrl+F");
+        opcion(ui, "Reemplazar", "Ctrl+H");
+    });
+    ui.menu_button("Ver", |ui| {
+        opcion(ui, "Acercar", "Ctrl++");
+        opcion(ui, "Alejar", "Ctrl+-");
+        opcion(ui, "Ajustar el circuito", "Ctrl+0");
+        ui.separator();
+        opcion(ui, "Panel de proyecto", "Ctrl+B");
+        opcion(ui, "Entradas y salidas", "");
+        opcion(ui, "Panel inferior", "Ctrl+J");
+    });
+    ui.menu_button("Simulación", |ui| {
+        opcion(ui, "Ejecutar", "F5");
+        opcion(ui, "Paso a paso", "F10");
+        opcion(ui, "Reiniciar", "Ctrl+Shift+F5");
+        ui.separator();
+        opcion(ui, "Tabla de verdad", "");
+        opcion(ui, "Ondas", "");
+    });
+    ui.menu_button("Ayuda", |ui| {
+        opcion(ui, "Guía del lenguaje", "F1");
+        opcion(ui, "Ejemplos", "");
+        opcion(ui, "Atajos de teclado", "");
+        ui.separator();
+        opcion(ui, "Buscar actualizaciones", "");
+        opcion(ui, "Reportar un problema", "");
+        ui.separator();
+        // La versión instalada, para confirmar que logicsm update funcionó
+        deshabilitada(ui, concat!("LogicSM ", env!("CARGO_PKG_VERSION")));
     });
 }
 
@@ -185,7 +255,7 @@ fn proyecto(ui: &mut egui::Ui) {
         accion(ui, "Guardar");
         let exportar = accion(ui, "Exportar ▾");
         egui::Popup::menu(&exportar).show(|ui| {
-            for formato in ["Imagen (PNG)", "Tabla de verdad (CSV)", "Verilog (.v)"] {
+            for formato in FORMATOS {
                 ui.add_enabled(false, egui::Button::new(formato));
             }
         });
