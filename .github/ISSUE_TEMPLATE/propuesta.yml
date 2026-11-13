@@ -1,0 +1,22 @@
+name: Propuesta
+description: Idea para una funcionalidad, componente o cambio en el lenguaje
+labels: ["propuesta"]
+body:
+  - type: textarea
+    id: problema
+    attributes:
+      label: ¿Qué problema resuelve?
+      description: Explica la necesidad, no solo la solución.
+    validations:
+      required: true
+  - type: textarea
+    id: propuesta
+    attributes:
+      label: Propuesta
+      description: Cómo funcionaría. Si cambia el lenguaje, incluye un ejemplo en código `.SA`.
+    validations:
+      required: true
+  - type: textarea
+    id: alternativas
+    attributes:
+      label: Alternativas consideradas

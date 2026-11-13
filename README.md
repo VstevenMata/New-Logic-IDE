@@ -64,19 +64,47 @@ main {
 }
 ```
 
+### Repetir sin copiar: arreglos de instancias y `for`
+
+```cpp
+circuit Adder8 {
+    in A[8], B[8], Cin;
+    out S[8], Cout;
+
+    FullAdder fa[8];                 // 8 instancias independientes
+
+    for (i = 0; i < 8; i++) {
+        fa[i].A = A[i];
+        fa[i].B = B[i];
+        S[i]    = fa[i].Sum;
+    }
+    fa[0].Cin = Cin;
+    for (i = 1; i < 8; i++) {
+        fa[i].Cin = fa[i-1].Cout;    // acarreo al siguiente bit
+    }
+    Cout = fa[7].Cout;
+}
+```
+
+El `for` solo **construye** el circuito al compilar (no se ejecuta durante la simulación). `i` solo se puede usar dentro de índices.
+
 ### Reglas del proyecto
 
-- **Sin `import`:** cualquier circuito de un archivo `.lx` en la carpeta raíz del proyecto se puede usar por su nombre.
-- **Por referencia:** si se modifica `FlipFlop.lx`, todos los circuitos que lo usan reflejan el cambio al recompilar.
-- **Se compila el circuito seleccionado**, no solo `main`. Al abrir `FlipFlop.lx` y presionar ▶ se simula ese circuito, y sus entradas aparecen como interruptores. Solo se compila ese circuito y sus dependencias, así que un error en otro archivo no bloquea la prueba.
+- **Extensión `.SA`** para los archivos de código (el compilador también acepta `.sa`).
+- **Sin `import`:** cualquier circuito de un archivo `.SA` en la carpeta raíz del proyecto se puede usar por su nombre.
+- **Por referencia:** si se modifica `FlipFlop.SA`, todos los circuitos que lo usan reflejan el cambio al recompilar.
+- **Se compila el circuito seleccionado**, no solo `main`. Al abrir `FlipFlop.SA` y presionar ▶ se simula ese circuito, y sus entradas aparecen como interruptores. Solo se compila ese circuito y sus dependencias, así que un error en otro archivo no bloquea la prueba.
+- Un archivo puede tener varios circuitos; el nombre del archivo no importa, cuenta el nombre del `circuit`.
+- Los moldes declarados fuera de un `circuit` se ven en **todo el proyecto**, igual que los circuitos.
+- Distingue mayúsculas: `Q` y `q` son distintos.
 - `main` es opcional: es solo el circuito que se abre por defecto.
 - **Constantes:** `0` y `1` se pueden pasar donde va una señal, por ejemplo `FlipFlop(1, 0)` o `A3(A, B, 1)`.
 
 ```
 mi-proyecto/
-├── main.lx
-├── FlipFlop.lx
-└── Contador.lx
+├── main.SA
+├── FlipFlop.SA
+└── Contador.SA
 ```
 
 ---
@@ -128,7 +156,7 @@ circuit Demo {
     clock CLK(1);
     button Reset;
 
-    c = Contador(CLK, Reset);    // circuito propio (Contador.lx)
+    c = Contador(CLK, Reset);    // circuito propio (Contador.SA)
     d = DecoHex(c.Q);            // circuito propio: 4 bits → 7 segmentos
 
     display7 D(d.a, d.b, d.c, d.d, d.e, d.f, d.g, 0);
@@ -151,6 +179,8 @@ circuit     = ( "circuit" IDENT | "main" ) "{" { stmt } "}" ;
 (* ---------- Sentencias ---------- *)
 stmt        = port_decl
             | device_decl
+            | inst_decl
+            | for_stmt
             | assign ;
 
 port_decl   = ( "in" | "out" | "button" ) port { "," port } ";" ;
@@ -159,8 +189,13 @@ port        = IDENT [ "[" INT "]" ] ;         (* A  o  A[8] = bus de 8 bits *)
 device_decl = DEVICE IDENT "(" [ args ] ")" ";" ;
 DEVICE      = "clock" | "led" | "display7" | "matrix" | "probe" ;
 
+inst_decl   = IDENT IDENT [ "[" iexpr "]" ] ";" ;   (* FullAdder fa[8]; *)
+
+for_stmt    = "for" "(" IDENT "=" iexpr ";" IDENT "<" iexpr ";" IDENT "++" ")"
+              "{" { stmt } "}" ;
+
 assign      = target "=" expr ";" ;
-target      = IDENT [ index ] ;
+target      = IDENT { index | "." IDENT } ;     (* Q,  S[3],  fa[i].Cin *)
 
 (* ---------- Expresiones ---------- *)
 expr        = postfix | concat ;
@@ -171,7 +206,9 @@ postfix     = primary { "." IDENT
                       | index } ;
 
 primary     = IDENT | INT | STRING | "(" expr ")" ;
-index       = "[" INT [ ".." INT ] "]" ;      (* rango inclusivo *)
+index       = "[" iexpr [ ".." iexpr ] "]" ;  (* rango inclusivo *)
+iexpr       = iterm { ( "+" | "-" ) iterm } ;   (* índices: 3,  i,  i-1 *)
+iterm       = INT | IDENT ;
 args        = expr { "," expr } ;
 
 (* ---------- Léxico ---------- *)
@@ -182,7 +219,7 @@ letter      = "A".."Z" | "a".."z" | "_" ;
 comment     = "//" { char } newline | "/*" { char } "*/" ;
 ```
 
-**Palabras reservadas (10):** `circuit`, `main`, `in`, `out`, `button`, `clock`, `led`, `display7`, `matrix`, `probe`.
+**Palabras reservadas (11):** `circuit`, `main`, `for`, `in`, `out`, `button`, `clock`, `led`, `display7`, `matrix`, `probe`.
 
 `and`, `or`, `not`, `rom`, `ram`, etc. **no** son palabras reservadas: son nombres predefinidos. Agregar un componente nuevo no requiere tocar el parser.
 
@@ -192,8 +229,21 @@ comment     = "//" { char } newline | "/*" { char } "*/" ;
 2. **Asignar a un nombre nuevo lo crea:** molde (`N = nor.set(2);`), instancia (`ff = FlipFlop(S, R);`) o señal (`x = N(A, B);`).
 3. **Un solo conductor por señal:** asignar dos veces la misma señal es error (excepto salidas tri-state en un bus).
 4. **Cantidades y anchos deben coincidir:** `A3(A, B)` es error (espera 3 entradas).
-5. **Resolución de nombres:** circuito actual → moldes globales del archivo → circuitos de la carpeta raíz → predefinidos.
+5. **Resolución de nombres:** circuito actual → moldes y circuitos del proyecto (cualquier `.SA` de la carpeta raíz) → predefinidos.
 6. Todo `out` debe estar asignado. Entradas sin usar generan advertencia.
+7. Una entrada de subcircuito sin conectar vale **X** y genera advertencia.
+8. El `for` se desenrolla al compilar; su variable solo existe en índices.
+
+---
+
+## Simulación y entorno
+
+- **Retardo:** cada compuerta tarda 1 unidad de tiempo. Así se ven las carreras y los *glitches*, y los flip-flops funcionan.
+- **Estado inicial:** todo arranca en **X** (rojo), como en la realidad. El botón **Reset** pone todo en 0.
+- **Paso a paso:** cada click avanza una unidad de tiempo y resalta las compuertas que cambiaron.
+- **Dibujo:** se genera automáticamente; las compuertas se pueden arrastrar para acomodarlas y las posiciones se guardan en un `.layout.json` junto al `.SA`. Los circuitos se crean en código, no dibujando.
+- **Idioma:** interfaz y mensajes de error en español; palabras clave en inglés.
+- **Ejemplos incluidos:** compuertas básicas, half adder, full adder, flip-flop SR, contador y display 7 segmentos.
 
 ---
 
@@ -235,7 +285,7 @@ endmodule
 LogicCircuit guarda los proyectos en XML (`.CircuitProject`) con elementos `LogicalCircuit` (cada circuito), `Pin` (entradas y salidas), `CircuitSymbol` (componente colocado en la cuadrícula, con `X`/`Y`) y `Wire` (tramo de cable `X1,Y1 → X2,Y2`). Los cables se conectan **por coordenadas**: un cable está conectado a un pin si su punta cae exactamente sobre él.
 
 - **Exportar** (Logic_F-4:13 → LogicCircuit): la conexión lógica sale del IR y las posiciones del layout por capas, ajustado a la cuadrícula de LogicCircuit. Cada circuito propio se exporta como un `LogicalCircuit`, así que se conserva la jerarquía. Pendiente: confirmar en su esquema (`Schema/CircuitProject.xml`) cómo identifica las compuertas predefinidas y sus atributos.
-- **Importar** (LogicCircuit → Logic_F-4:13): leer el XML, reconstruir las conexiones a partir de la geometría y generar código `.lx`. Así un estudiante puede ver sus circuitos de LogicCircuit escritos como código.
+- **Importar** (LogicCircuit → Logic_F-4:13): leer el XML, reconstruir las conexiones a partir de la geometría y generar código `.SA`. Así un estudiante puede ver sus circuitos de LogicCircuit escritos como código.
 
 LogicCircuit es GPL-2.0: se implementa un lector/escritor propio del formato, sin copiar su código.
 
@@ -253,7 +303,7 @@ LogicCircuit es GPL-2.0: se implementa un lector/escritor propio del formato, si
 | `egui_dock` | Paneles acoplables tipo IDE |
 | `rfd` | Diálogos nativos de abrir y guardar |
 | `serde` + `serde_json` | Configuración y posiciones del dibujo |
-| `notify` | Vigilar la carpeta del proyecto y recompilar al cambiar un `.lx` |
+| `notify` | Vigilar la carpeta del proyecto y recompilar al cambiar un `.SA` |
 | `quick-xml` | Exportar e importar proyectos de LogicCircuit |
 | `cargo test` | Tests del compilador y del simulador |
 | GitHub Actions + `cargo-dist` | Build, tests y ejecutables/instaladores por plataforma |
@@ -264,7 +314,7 @@ LogicCircuit es GPL-2.0: se implementa un lector/escritor propio del formato, si
 ### Pipeline del compilador
 
 ```
-código .lx → Lexer → Parser → AST → Análisis semántico → Elaboración → Circuit IR
+código .SA → Lexer → Parser → AST → Análisis semántico → Elaboración → Circuit IR
                                                                           │
                                                    ┌──────────────────────┼─────────────┐
                                                 Simulador            Visualizador   (futuro: Verilog,
@@ -296,7 +346,7 @@ New-Logic-IDE/
 ├── crates/
 │   ├── logicf4-core/       # lexer, parser, AST, semántica, elaboración → IR
 │   ├── logicf4-sim/        # motor de simulación
-│   └── logicf4-cli/        # logicf4 check | sim | table archivo.lx
+│   └── logicf4-cli/        # logicf4 check | sim | table archivo.SA
 └── apps/
     └── desktop/            # eframe: editor, lienzo, paneles
 ```
@@ -308,6 +358,8 @@ El editor de código usa el **lexer real** del compilador para el resaltado de s
 ---
 
 ## Plan de desarrollo
+
+**MVP terminado cuando:** se escribe el FullAdder en el editor, se ve dibujado, se activan sus entradas, la tabla de verdad es correcta, y los tests del parser y del simulador pasan en GitHub Actions.
 
 1. **Núcleo:** lexer, parser, semántica, IR y simulador, probados desde la CLI con tests.
 2. **App mínima:** editor, circuito dibujado automáticamente, interruptores, constantes, compuertas, `out` y LED.
@@ -322,4 +374,9 @@ El editor de código usa el **lexer real** del compilador para el resaltado de s
 
 ## Licencia
 
-Por definir.
+Doble licencia, a elección del usuario, como es habitual en Rust:
+
+- [MIT](LICENSE-MIT)
+- [Apache-2.0](LICENSE-APACHE)
+
+Salvo que se indique lo contrario, cualquier contribución enviada para su inclusión en el proyecto se licencia bajo los mismos términos, sin condiciones adicionales.
