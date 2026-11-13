@@ -42,7 +42,7 @@ fn ventana() -> eframe::Result {
         opciones,
         Box::new(|cc| {
             interfaz::estilo(&cc.egui_ctx);
-            Ok(Box::new(interfaz::Interfaz))
+            Ok(Box::new(interfaz::Interfaz::nueva()))
         }),
     )
 }
