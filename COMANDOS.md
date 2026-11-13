@@ -32,21 +32,11 @@ nix develop -c cargo clippy --workspace --all-targets -- -D warnings
 nix develop -c cargo test --workspace
 ```
 
-## Crear los ejecutables (release)
+## Publicar una versión nueva (release)
 
-GitHub Actions compila los ejecutables de Linux, macOS y Windows y crea el release. Hazlo siempre desde `main` actualizado:
+El release es automático. GitHub Actions compila los ejecutables de Linux, macOS y Windows, crea el tag y publica el release cuando se fusiona a `main` un PR que cambia la versión.
 
-```bash
-git switch main && git pull
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-Puedes ver el avance en la pestaña **Actions** del repositorio (tarda unos 10 minutos).
-
-## Actualizar el ejecutable (nueva versión)
-
-1. Cambia `version` en `Cargo.toml` (sección `[workspace.package]`), por ejemplo a `0.2.0`.
+1. En tu rama, cambia `version` en `Cargo.toml` (sección `[workspace.package]`), por ejemplo a `0.3.0`.
 2. Actualiza `Cargo.lock`, porque si no, el release falla:
 
    ```bash
@@ -54,13 +44,8 @@ Puedes ver el avance en la pestaña **Actions** del repositorio (tarda unos 10 m
    ```
 
 3. Haz commit, abre el PR y fusiónalo a `main`.
-4. Crea el tag con la versión nueva:
 
-   ```bash
-   git switch main && git pull
-   git tag v0.2.0
-   git push origin v0.2.0
-   ```
+Listo: se crea el tag `v0.3.0` y el release. Puedes ver el avance en la pestaña **Actions** del repositorio (tarda unos 5 minutos). Si el PR no cambia la versión, no se publica nada.
 
 Los que ya lo tienen instalado se actualizan con `logicsm update`.
 
