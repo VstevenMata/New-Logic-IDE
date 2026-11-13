@@ -1,0 +1,24 @@
+# En cada PR revisa formato, advertencias y tests. El PR muestra ✅ o ❌ antes de fusionar.
+name: CI
+
+on:
+  pull_request:
+
+# Si se sube otro commit al mismo PR, cancela la revisión anterior
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  revisar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      # Guarda lo ya compilado entre corridas: la primera tarda, las siguientes son rápidas
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked

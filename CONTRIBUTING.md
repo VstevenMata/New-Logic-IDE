@@ -7,7 +7,7 @@ Al participar aceptas el [Código de Conducta](CODE_OF_CONDUCT.md).
 ## Antes de empezar
 
 - **Bugs:** abre un issue con la plantilla *Reporte de bug*. Incluye el código `.SA` mínimo que reproduce el problema.
-- **Ideas nuevas:** abre primero un issue con la plantilla *Propuesta*. Así se discute antes de que inviertas tiempo en un PR que quizá no encaje con el diseño (ver [README](README.md)).
+- **Ideas nuevas:** abre primero un issue con la plantilla *Propuesta*. Así se discute antes de que inviertas tiempo en un PR que quizá no encaje con el diseño (ver el [diseño](docs/DISENO.md)).
 - **Vulnerabilidades de seguridad:** no abras un issue público; sigue [SECURITY.md](SECURITY.md).
 
 ## Flujo de trabajo
