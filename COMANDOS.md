@@ -26,6 +26,8 @@ Dentro de `nix develop`:
 
 ## Antes de abrir un PR
 
+El CI (`.github/workflows/ci.yml`) corre estas revisiones en cada PR y marca ✅ o ❌. Para revisarlo antes en tu computadora:
+
 ```bash
 nix develop -c cargo fmt --all
 nix develop -c cargo clippy --workspace --all-targets -- -D warnings

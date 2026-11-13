@@ -60,7 +60,11 @@ fn correr_instalador(desinstalar: bool) -> std::io::Result<bool> {
 
     if !desinstalar {
         let orden = format!("curl -fsSL {URL}/instalar.sh | bash -s -- -y");
-        return Ok(Command::new("bash").arg("-c").arg(orden).status()?.success());
+        return Ok(Command::new("bash")
+            .arg("-c")
+            .arg(orden)
+            .status()?
+            .success());
     }
     let mut bash = Command::new("bash")
         .args(["-s", "--", "--desinstalar"])
@@ -83,7 +87,10 @@ fn correr_instalador(desinstalar: bool) -> std::io::Result<bool> {
     let orden = if desinstalar {
         let ruta = std::env::temp_dir().join("logicsm-instalador.ps1");
         // Con BOM, para que Windows PowerShell 5 lea bien las tildes
-        std::fs::write(&ruta, format!("\u{feff}{}", include_str!("../../../instalar.ps1")))?;
+        std::fs::write(
+            &ruta,
+            format!("\u{feff}{}", include_str!("../../../instalar.ps1")),
+        )?;
         let ruta = ruta.display().to_string().replace('\'', "''");
         format!("& '{ruta}' -Desinstalar -Esperar {pid}")
     } else {
@@ -93,7 +100,13 @@ fn correr_instalador(desinstalar: bool) -> std::io::Result<bool> {
         )
     };
     Command::new("powershell")
-        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &orden])
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &orden,
+        ])
         .creation_flags(CREATE_NEW_CONSOLE)
         .spawn()?;
     println!("El instalador se abrió en una ventana nueva.");
