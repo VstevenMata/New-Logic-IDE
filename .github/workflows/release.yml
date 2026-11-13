@@ -1,16 +1,41 @@
-# Al subir un tag v* (git tag v0.1.0 && git push origin v0.1.0) compila LogicSM para cada
-# sistema y publica el release con los nombres que descargan instalar.sh e instalar.ps1
+# Al fusionar a main: si la versión de Cargo.toml no tiene tag todavía, compila LogicSM para
+# cada sistema, crea el tag vX.Y.Z y publica el release con los nombres que descargan
+# instalar.sh e instalar.ps1. Si la versión no cambió, no hace nada.
 name: Release
 
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
 
 permissions:
   contents: write
 
+# Dos merges seguidos no publican el mismo release dos veces
+concurrency: release
+
 jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.leer.outputs.tag }}
+      nuevo: ${{ steps.leer.outputs.nuevo }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: leer
+        run: |
+          # El primer "version =" de Cargo.toml es el de [workspace.package]
+          tag="v$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null; then
+            echo "nuevo=false" >> "$GITHUB_OUTPUT"
+            echo "$tag ya existe; no se publica nada"
+          else
+            echo "nuevo=true" >> "$GITHUB_OUTPUT"
+          fi
+
   compilar:
+    needs: version
+    if: needs.version.outputs.nuevo == 'true'
     strategy:
       matrix:
         include:
@@ -39,13 +64,15 @@ jobs:
           path: ${{ matrix.archivo }}
 
   publicar:
-    needs: compilar
+    needs: [version, compilar]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
-      - run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "LogicSM $GITHUB_REF_NAME" --generate-notes
+      # Crea el tag en el commit del merge y el release con los ejecutables
+      - run: gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "LogicSM $TAG" --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
