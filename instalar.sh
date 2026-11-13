@@ -90,6 +90,12 @@ fi
 ACTUAL=""
 if [ -L "$ENLACE" ]; then ACTUAL=$(readlink "$ENLACE"); elif [ -f "$ENLACE" ]; then ACTUAL=$ENLACE; fi
 if [ -n "$ACTUAL" ] && [ $DIR_DADO = 0 ]; then DIR=${ACTUAL%/*}; fi
+# Versión instalada ("LogicSM 0.1.1" → v0.1.1), para decir "se actualizó de … a …"
+INSTALADA=""
+if [ -n "$ACTUAL" ]; then
+    INSTALADA=$("$ACTUAL" --version 2>/dev/null | awk '{print $2}' || true)
+    INSTALADA=${INSTALADA:+v$INSTALADA}
+fi
 
 # Versión del último release (sin release o sin internet queda vacía); desinstalar no la necesita
 VERSION=""
@@ -183,6 +189,11 @@ instalar() {
     local archivo="$CMD-$SO-$ARQ" destino="$DIR/$CMD"
     echo
     [ -n "$VERSION" ] || error "no hay ningún release publicado todavía, o no hay conexión a internet"
+    if [ "$INSTALADA" = "$VERSION" ] && [ "$destino" = "$ACTUAL" ]; then
+        ok "Ya tienes la última versión ($VERSION)."
+        echo
+        return
+    fi
     if ! mkdir -p "$DIR" "$BIN" 2>/dev/null || [ ! -w "$DIR" ]; then error "no se puede escribir en $(corto "$DIR")"; fi
     TMP="$destino.tmp"
     if [ -t 2 ]; then
@@ -226,6 +237,12 @@ EOF
         ok "Acceso agregado al menú de aplicaciones"
     fi
 
+    if [ -n "$ACTUAL" ]; then
+        printf '\n  %s%s se actualizó correctamente.%s\n\n' "$VERDE$B" "$NOMBRE" "$R"
+        printf '    %sVersión%s     %s\n' "$T" "$R" "${INSTALADA:+$INSTALADA → }$VERSION"
+        printf '    %sUbicación%s   %s\n\n' "$T" "$R" "$(corto "$destino")"
+        return
+    fi
     printf '\n  %s%s se instaló correctamente.%s\n\n' "$VERDE$B" "$NOMBRE" "$R"
     printf '    %sVersión%s     %s\n' "$T" "$R" "$VERSION"
     printf '    %sUbicación%s   %s\n\n' "$T" "$R" "$(corto "$destino")"

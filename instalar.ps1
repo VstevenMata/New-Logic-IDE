@@ -69,6 +69,13 @@ function Instalar {
     } catch { throw "no se puede escribir en $Raiz" }
     Write-Host ''
 
+    # Versión instalada (va dentro del .exe), para decir "se actualizó de … a …"
+    $instalada = ''
+    if ($Previa) {
+        try { $v = (Get-Item (Join-Path $Previa $ArchivoExe)).VersionInfo.ProductVersion; if ($v) { $instalada = "v$v" } } catch {}
+    }
+    if ($instalada -eq $Version -and $Previa -eq $Raiz) { Ok "Ya tienes la última versión ($Version)."; Write-Host ''; return }
+
     $tmp = "$exe.tmp"
     try { Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/$Repo/releases/download/$Version/$archivo" -OutFile $tmp }
     catch { Remove-Item $tmp -ErrorAction SilentlyContinue; throw "no se pudo descargar $archivo (puede que no exista para windows $Arq)" }
@@ -97,6 +104,13 @@ function Instalar {
     $lnk.Save()
     Ok 'Acceso agregado al menú Inicio'
 
+    if ($Previa) {
+        $versiones = if ($instalada) { "$instalada → $Version" } else { $Version }
+        Write-Host "`n  $Nombre se actualizó correctamente.`n" -ForegroundColor Green
+        Write-Host '    Versión     ' -ForegroundColor DarkGray -NoNewline; Write-Host $versiones
+        Write-Host '    Ubicación   ' -ForegroundColor DarkGray -NoNewline; Write-Host "$exe`n"
+        return
+    }
     Write-Host "`n  $Nombre se instaló correctamente.`n" -ForegroundColor Green
     Write-Host '    Versión     ' -ForegroundColor DarkGray -NoNewline; Write-Host $Version
     Write-Host '    Ubicación   ' -ForegroundColor DarkGray -NoNewline; Write-Host $exe
