@@ -11,3 +11,6 @@ repository = "https://github.com/VstevenMata/New-Logic-IDE"
 [workspace.dependencies]
 logicsm-core = { path = "crates/logicsm-core" }
 logicsm-sim = { path = "crates/logicsm-sim" }
+
+[profile.release]
+strip = true
