@@ -1,8 +1,8 @@
 //! Parser: tokens → AST. Descenso recursivo escrito a mano.
 //!
-//! ponytail: por ahora solo `circuit`/`main`, `in`, `out` y asignaciones con
-//! compuertas (`X = and(A, not(B));`). Buses, `for`, dispositivos, memorias e
-//! instancias de circuitos propios dan error "todavía no".
+//! ponytail: por ahora `circuit`/`main`, `in`, `out`, compuertas (`X = and(A, not(B));`)
+//! y circuitos propios (`m = MedioSumador(A, B);`, `m.Suma`). Buses, `for`,
+//! dispositivos y memorias dan error "todavía no".
 
 use crate::lexer::{Reservada, Tipo, Token, tokenizar};
 use crate::{Compuerta, Error};
@@ -10,7 +10,7 @@ use std::ops::Range;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Circuito {
-    pub nombre: String,
+    pub nombre: Nombre,
     pub entradas: Vec<Nombre>,
     pub salidas: Vec<Nombre>,
     pub asignaciones: Vec<(Nombre, Expr)>,
@@ -27,6 +27,10 @@ pub enum Expr {
     Senal(Nombre),
     Constante(bool),
     Compuerta(Compuerta, Vec<Expr>),
+    /// `MedioSumador(A, B)`: una copia nueva de un circuito propio
+    Instancia(Nombre, Vec<Expr>),
+    /// `m.Suma`: una salida de una instancia
+    Miembro(Nombre, Nombre),
 }
 
 /// Devuelve todos los errores del lexer, o el primero de sintaxis.
@@ -116,12 +120,12 @@ impl Parser<'_> {
         let nombre = match self.actual().tipo {
             Tipo::Reservada(Reservada::Circuit) => {
                 self.avanzar();
-                self.nombre()?.texto
+                self.nombre()?
             }
-            Tipo::Reservada(Reservada::Main) => {
-                self.avanzar();
-                "main".into()
-            }
+            Tipo::Reservada(Reservada::Main) => Nombre {
+                texto: "main".into(),
+                rango: self.avanzar().rango,
+            },
             _ => return Err(self.error("`circuit` o `main`")),
         };
         let mut c = Circuito {
@@ -175,16 +179,17 @@ impl Parser<'_> {
         match t.tipo {
             Tipo::Ident(_) => {
                 let n = self.nombre()?;
-                if self.actual().tipo == Tipo::ParAbre {
-                    return Err(Error {
-                        mensaje: format!(
-                            "`{}(...)`: usar circuitos propios todavía no está disponible",
-                            n.texto
-                        ),
-                        rango: n.rango,
-                    });
+                match self.actual().tipo {
+                    Tipo::ParAbre => {
+                        let (args, _) = self.argumentos()?;
+                        Ok(Expr::Instancia(n, args))
+                    }
+                    Tipo::Punto => {
+                        self.avanzar();
+                        Ok(Expr::Miembro(n, self.nombre()?))
+                    }
+                    _ => Ok(Expr::Senal(n)),
                 }
-                Ok(Expr::Senal(n))
             }
             Tipo::Entero(v @ (0 | 1)) => {
                 self.avanzar();
@@ -201,13 +206,7 @@ impl Parser<'_> {
                     return Err(self.todavia_no());
                 };
                 self.avanzar();
-                self.esperar(Tipo::ParAbre, "`(`")?;
-                let mut args = vec![self.expr()?];
-                while self.actual().tipo == Tipo::Coma {
-                    self.avanzar();
-                    args.push(self.expr()?);
-                }
-                let cierre = self.esperar(Tipo::ParCierra, "`,` o `)`")?;
+                let (args, cierre) = self.argumentos()?;
                 if !compuerta.entradas_validas(args.len()) {
                     let cuantas = match compuerta {
                         Compuerta::Not | Compuerta::Buffer => "1 entrada",
@@ -223,6 +222,18 @@ impl Parser<'_> {
             _ => Err(self.error("una señal, `0`, `1` o una compuerta")),
         }
     }
+
+    /// `(expr, expr, ...)`; devuelve también el `)` para marcar errores
+    fn argumentos(&mut self) -> Result<(Vec<Expr>, Token), Error> {
+        self.esperar(Tipo::ParAbre, "`(`")?;
+        let mut args = vec![self.expr()?];
+        while self.actual().tipo == Tipo::Coma {
+            self.avanzar();
+            args.push(self.expr()?);
+        }
+        let cierre = self.esperar(Tipo::ParCierra, "`,` o `)`")?;
+        Ok((args, cierre))
+    }
 }
 
 #[cfg(test)]
@@ -236,7 +247,7 @@ mod tests {
     #[test]
     fn circuito_con_compuertas_anidadas() {
         let c = &parsear("circuit Demo { in A, B; out X; X = and(A, not(B), 1); }").unwrap()[0];
-        assert_eq!(c.nombre, "Demo");
+        assert_eq!(c.nombre.texto, "Demo");
         assert_eq!(c.entradas.len(), 2);
         assert_eq!(c.salidas[0].texto, "X");
         let Expr::Compuerta(Compuerta::And, args) = &c.asignaciones[0].1 else {
@@ -244,6 +255,20 @@ mod tests {
         };
         assert!(matches!(args[1], Expr::Compuerta(Compuerta::Not, _)));
         assert_eq!(args[2], Expr::Constante(true));
+    }
+
+    #[test]
+    fn instancias_y_salidas() {
+        let c = &parsear("main { m = MedioSumador(A, 1); X = m.Suma; }").unwrap()[0];
+        let Expr::Instancia(circuito, args) = &c.asignaciones[0].1 else {
+            panic!("se esperaba una instancia");
+        };
+        assert_eq!(circuito.texto, "MedioSumador");
+        assert_eq!(args.len(), 2);
+        let Expr::Miembro(m, salida) = &c.asignaciones[1].1 else {
+            panic!("se esperaba m.Suma");
+        };
+        assert_eq!((m.texto.as_str(), salida.texto.as_str()), ("m", "Suma"));
     }
 
     #[test]

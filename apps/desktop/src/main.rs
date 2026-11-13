@@ -5,6 +5,7 @@
 mod ayuda;
 mod comandos;
 mod interfaz;
+mod proyecto;
 
 use eframe::egui;
 use std::process::ExitCode;

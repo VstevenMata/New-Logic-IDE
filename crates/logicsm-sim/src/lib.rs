@@ -86,4 +86,31 @@ mod tests {
         let red = logicsm_core::compilar("main { out X; X = not(X); }").unwrap();
         assert!(!simular(&red, &mut Vec::new(), &[]));
     }
+
+    #[test]
+    fn sumador_completo_con_dos_medios_sumadores() {
+        let red = logicsm_core::compilar(
+            "circuit MedioSumador { in A, B; out Suma, Acarreo; Suma = xor(A, B); Acarreo = and(A, B); }
+             circuit SumadorCompleto {
+                 in A, B, Cin; out S, Cout;
+                 m1 = MedioSumador(A, B);
+                 m2 = MedioSumador(m1.Suma, Cin);
+                 S = m2.Suma;
+                 Cout = or(m1.Acarreo, m2.Acarreo);
+             }",
+        )
+        .unwrap();
+        let mut v = Vec::new();
+        for fila in 0..8u8 {
+            let e: Vec<bool> = (0..3).map(|i| (fila >> (2 - i)) & 1 == 1).collect();
+            let unos = fila.count_ones();
+            assert!(simular(&red, &mut v, &e));
+            // S = bit bajo de la suma, Cout = bit alto
+            assert_eq!(
+                salidas(&red, &v),
+                [unos % 2 == 1, unos >= 2],
+                "fila {fila:03b}"
+            );
+        }
+    }
 }

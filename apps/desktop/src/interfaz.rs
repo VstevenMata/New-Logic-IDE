@@ -4,13 +4,14 @@
 //! El código se compila en cada cambio y el lienzo dibuja el circuito al instante.
 
 use crate::ayuda;
+use crate::proyecto::Proyecto;
 use eframe::egui::{
     self, Align2, Color32, CornerRadius, FontId, Frame, Margin, Pos2, Rect, RichText, Sense, Shape,
     Stroke, StrokeKind, Theme, Vec2, pos2, vec2,
 };
 use logicsm_core::Compuerta;
 use logicsm_core::netlist::{Netlist, Nodo, Tipo};
-use std::path::PathBuf;
+use std::collections::HashMap;
 
 /// Colores de un tema. Hay dos: CLARO (pastel de index.html) y OSCURO.
 struct Paleta {
@@ -114,7 +115,6 @@ pub fn estilo(ctx: &egui::Context) {
 enum Accion {
     Nuevo,
     Abrir,
-    Ejemplo(&'static str),
     Salir,
 }
 
@@ -138,13 +138,8 @@ enum Pestana {
 /// Aviso para Ejecutar y Paso a paso mientras no exista `clock`
 const SIN_RELOJ: &str = "Llega con clock. Por ahora la simulación corre sola al escribir.";
 
-const FILTRO: (&str, &[&str]) = ("Código LogicSM", &["SA", "sa"]);
-
 pub struct Interfaz {
-    codigo: String,
-    /// El código tal como está en el archivo, para saber si hay cambios sin guardar
-    guardado: String,
-    ruta: Option<PathBuf>,
+    proyecto: Proyecto,
     /// Último circuito que compiló; se queda mientras el código tiene errores.
     red: Option<Netlist>,
     problemas: Vec<String>,
@@ -162,11 +157,19 @@ pub struct Interfaz {
     ventana: Option<Ventana>,
     /// Acción esperando confirmación porque hay cambios sin guardar
     confirmar: Option<Accion>,
+    /// Archivo esperando confirmación para eliminarlo
+    borrar: Option<usize>,
+    /// Nombre que se escribe para un archivo nuevo (`None`) o para renombrar uno
+    nombrando: Option<(Option<usize>, String)>,
+    error_nombre: Option<String>,
     /// Ya se confirmó la salida: no volver a preguntar al cerrar
     saliendo: bool,
     /// Evento del menú Editar (deshacer, copiar…) que recibe el editor
     para_editor: Option<egui::Event>,
     logo: egui::TextureHandle,
+    /// Piezas del lienzo que el usuario movió, por su clave (ver `clave`), relativas
+    /// a la esquina del lienzo
+    posiciones: HashMap<String, Pos2>,
 }
 
 impl Interfaz {
@@ -178,9 +181,7 @@ impl Interfaz {
             &icono.rgba,
         );
         let mut s = Self {
-            codigo: String::new(),
-            guardado: String::new(),
-            ruta: None,
+            proyecto: Proyecto::nuevo(),
             red: None,
             problemas: Vec::new(),
             entradas: Vec::new(),
@@ -193,16 +194,20 @@ impl Interfaz {
             ver_inferior: true,
             ventana: None,
             confirmar: None,
+            borrar: None,
+            nombrando: None,
+            error_nombre: None,
             saliendo: false,
             para_editor: None,
             logo: ctx.load_texture("logo", imagen, egui::TextureOptions::LINEAR),
+            posiciones: HashMap::new(),
         };
-        s.cargar(ayuda::EJEMPLOS[0].1.into(), None);
+        s.compilar();
         s
     }
 
     fn compilar(&mut self) {
-        match logicsm_core::compilar(&self.codigo) {
+        match self.proyecto.compilar() {
             Ok(red) => {
                 self.problemas.clear();
                 let n = red
@@ -214,30 +219,21 @@ impl Interfaz {
                 self.valores.clear();
                 self.red = Some(red);
             }
-            Err(errores) => {
-                self.problemas = errores
-                    .iter()
-                    .map(|e| {
-                        let linea = self.codigo[..e.rango.start].matches('\n').count() + 1;
-                        format!("Línea {linea}: {}", e.mensaje)
-                    })
-                    .collect();
-            }
+            Err(problemas) => self.problemas = problemas,
         }
     }
 
-    /// Pone un código nuevo en el editor (archivo abierto, ejemplo o plantilla)
-    fn cargar(&mut self, texto: String, ruta: Option<PathBuf>) {
-        self.guardado = texto.clone();
-        self.codigo = texto;
-        self.ruta = ruta;
+    /// Se cambió de archivo o de proyecto: se dibuja desde cero
+    fn recompilar_desde_cero(&mut self) {
         self.red = None;
         self.entradas.clear();
+        self.posiciones.clear();
         self.compilar();
     }
 
-    fn sin_guardar(&self) -> bool {
-        self.codigo != self.guardado
+    fn abrir_archivo(&mut self, i: usize) {
+        self.proyecto.activo = i;
+        self.recompilar_desde_cero();
     }
 
     /// Mensaje en la pestaña Salida, que se muestra
@@ -249,7 +245,7 @@ impl Interfaz {
 
     /// Hace la acción, o primero pregunta si hay cambios sin guardar
     fn pedir(&mut self, ctx: &egui::Context, accion: Accion) {
-        if self.sin_guardar() {
+        if self.proyecto.sin_guardar() {
             self.confirmar = Some(accion);
         } else {
             self.hacer(ctx, accion);
@@ -258,21 +254,24 @@ impl Interfaz {
 
     fn hacer(&mut self, ctx: &egui::Context, accion: Accion) {
         match accion {
-            Accion::Nuevo => self.cargar(ayuda::PLANTILLA.into(), None),
-            Accion::Ejemplo(codigo) => self.cargar(codigo.into(), None),
+            Accion::Nuevo => {
+                self.proyecto = Proyecto::nuevo();
+                self.recompilar_desde_cero();
+            }
             Accion::Abrir => {
-                let Some(ruta) = rfd::FileDialog::new()
-                    .add_filter(FILTRO.0, FILTRO.1)
-                    .pick_file()
+                let Some(carpeta) = rfd::FileDialog::new()
+                    .set_title("Abrir la carpeta del proyecto")
+                    .pick_folder()
                 else {
                     return;
                 };
-                match std::fs::read_to_string(&ruta) {
-                    Ok(texto) => {
-                        self.salida.push(format!("Abierto: {}", ruta.display()));
-                        self.cargar(texto, Some(ruta));
+                match Proyecto::abrir(carpeta.clone()) {
+                    Ok(proyecto) => {
+                        self.salida.push(format!("Abierto: {}", carpeta.display()));
+                        self.proyecto = proyecto;
+                        self.recompilar_desde_cero();
                     }
-                    Err(e) => self.aviso(format!("No se pudo abrir {}: {e}", ruta.display())),
+                    Err(e) => self.aviso(format!("No se pudo abrir {}: {e}", carpeta.display())),
                 }
             }
             Accion::Salir => {
@@ -282,41 +281,43 @@ impl Interfaz {
         }
     }
 
-    /// Guarda en el archivo actual, o pregunta dónde (`como` o si nunca se guardó).
+    /// Guarda en la carpeta del proyecto, o pregunta cuál (`otra` o si nunca se guardó).
     /// Devuelve `false` si no se guardó.
-    fn guardar(&mut self, como: bool) -> bool {
-        let ruta = match &self.ruta {
-            Some(ruta) if !como => ruta.clone(),
-            _ => {
-                let nombre = self.ruta.as_ref().and_then(|r| r.file_name()).map_or_else(
-                    || "circuito.SA".to_string(),
-                    |n| n.to_string_lossy().into_owned(),
-                );
-                let Some(mut ruta) = rfd::FileDialog::new()
-                    .add_filter(FILTRO.0, FILTRO.1)
-                    .set_file_name(nombre)
-                    .save_file()
-                else {
-                    return false;
-                };
-                if ruta.extension().is_none() {
-                    ruta.set_extension("SA");
-                }
-                ruta
-            }
+    fn guardar(&mut self, otra: bool) -> bool {
+        let nueva = if otra || self.proyecto.carpeta.is_none() {
+            let Some(carpeta) = rfd::FileDialog::new()
+                .set_title("Carpeta donde guardar el proyecto")
+                .pick_folder()
+            else {
+                return false;
+            };
+            Some(carpeta)
+        } else {
+            None
         };
-        match std::fs::write(&ruta, &self.codigo) {
+        match self.proyecto.guardar(nueva) {
             Ok(()) => {
-                self.guardado = self.codigo.clone();
-                self.salida.push(format!("Guardado: {}", ruta.display()));
-                self.ruta = Some(ruta);
+                if let Some(carpeta) = &self.proyecto.carpeta {
+                    self.salida
+                        .push(format!("Guardado en {}", carpeta.display()));
+                }
                 true
             }
             Err(e) => {
-                self.aviso(format!("No se pudo guardar {}: {e}", ruta.display()));
+                self.aviso(e);
                 false
             }
         }
+    }
+
+    fn agregar_ejemplo(&mut self, archivos: &[(&str, &str)]) {
+        for aviso in self.proyecto.agregar(archivos) {
+            self.aviso(aviso);
+        }
+        let nombres: Vec<&str> = archivos.iter().map(|(nombre, _)| *nombre).collect();
+        self.salida
+            .push(format!("Agregado al proyecto: {}", nombres.join(", ")));
+        self.recompilar_desde_cero();
     }
 
     /// Entradas en 0 y se borra la memoria de los flip-flops
@@ -359,14 +360,52 @@ impl Interfaz {
             self.ventana = Some(Ventana::Guia);
         }
         // Cerrar con la X de la ventana también pregunta
-        if ctx.input(|i| i.viewport().close_requested()) && !self.saliendo && self.sin_guardar() {
+        let cerrar = ctx.input(|i| i.viewport().close_requested());
+        if cerrar && !self.saliendo && self.proyecto.sin_guardar() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.confirmar = Some(Accion::Salir);
         }
     }
 
-    /// Diálogo "Hay cambios sin guardar"
+    /// Diálogos "Hay cambios sin guardar" y "¿Eliminar el archivo?"
     fn confirmacion(&mut self, ctx: &egui::Context) {
+        if let Some(i) = self.borrar {
+            let nombre = self.proyecto.archivos[i].nombre.clone();
+            let mut eliminar = None;
+            let r = egui::Modal::new(egui::Id::unique("borrar")).show(ctx, |ui| {
+                ui.set_width(340.0);
+                ui.label(
+                    RichText::new(format!("¿Eliminar {nombre}?"))
+                        .size(14.0)
+                        .strong(),
+                );
+                ui.add_space(4.0);
+                ui.label("También se borra de la carpeta del proyecto.");
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Eliminar").clicked() {
+                        eliminar = Some(true);
+                    }
+                    if ui.button("Cancelar").clicked() {
+                        eliminar = Some(false);
+                    }
+                });
+            });
+            if r.should_close() && eliminar.is_none() {
+                eliminar = Some(false);
+            }
+            if let Some(eliminar) = eliminar {
+                self.borrar = None;
+                if eliminar {
+                    match self.proyecto.borrar(i) {
+                        Ok(()) => self.salida.push(format!("Eliminado: {nombre}")),
+                        Err(e) => self.aviso(e),
+                    }
+                    self.recompilar_desde_cero();
+                }
+            }
+        }
+
         let Some(accion) = self.confirmar else {
             return;
         };
@@ -459,14 +498,14 @@ impl eframe::App for Interfaz {
             .show(ui, |ui| self.barra_superior(ui));
         if self.ver_proyecto {
             egui::Panel::left("proyecto")
-                .exact_size(174.0)
+                .exact_size(190.0)
                 .resizable(false)
                 .frame(
                     Frame::new()
                         .fill(c.panel)
                         .inner_margin(Margin::symmetric(14, 15)),
                 )
-                .show(ui, |ui| self.proyecto(ui));
+                .show(ui, |ui| self.panel_proyecto(ui));
         }
         if self.ver_senales {
             egui::Panel::right("senales")
@@ -553,17 +592,22 @@ impl Interfaz {
         };
 
         ui.menu_button("Archivo", |ui| {
-            if opcion(ui, "Nuevo", "Ctrl+N") {
+            if opcion(ui, "Nuevo proyecto", "Ctrl+N") {
                 self.pedir(&ctx, Accion::Nuevo);
             }
-            if opcion(ui, "Abrir…", "Ctrl+O") {
+            if opcion(ui, "Abrir carpeta…", "Ctrl+O") {
                 self.pedir(&ctx, Accion::Abrir);
+            }
+            if opcion(ui, "Nuevo archivo", "") {
+                self.ver_proyecto = true;
+                self.nombrando = Some((None, String::new()));
+                self.error_nombre = None;
             }
             ui.separator();
             if opcion(ui, "Guardar", "Ctrl+S") {
                 self.guardar(false);
             }
-            if opcion(ui, "Guardar como…", "Ctrl+Shift+S") {
+            if opcion(ui, "Guardar en otra carpeta…", "Ctrl+Shift+S") {
                 self.guardar(true);
             }
             ui.menu_button("Exportar", |ui| {
@@ -639,13 +683,7 @@ impl Interfaz {
             if opcion(ui, "Guía del lenguaje", "F1") {
                 self.ventana = Some(Ventana::Guia);
             }
-            ui.menu_button("Ejemplos", |ui| {
-                for (nombre, codigo) in ayuda::EJEMPLOS {
-                    if ui.button(nombre).clicked() {
-                        self.pedir(&ctx, Accion::Ejemplo(codigo));
-                    }
-                }
-            });
+            ui.menu_button("Ejemplos", |ui| self.lista_de_ejemplos(ui));
             if opcion(ui, "Atajos de teclado", "") {
                 self.ventana = Some(Ventana::Atajos);
             }
@@ -666,7 +704,17 @@ impl Interfaz {
         });
     }
 
-    fn proyecto(&mut self, ui: &mut egui::Ui) {
+    /// Circuitos clásicos que se agregan al proyecto (menú Ayuda y panel Proyecto)
+    fn lista_de_ejemplos(&mut self, ui: &mut egui::Ui) {
+        ui.add_enabled(false, egui::Label::new("Se agregan al proyecto:"));
+        for (titulo, archivos) in ayuda::EJEMPLOS {
+            if ui.button(*titulo).clicked() {
+                self.agregar_ejemplo(archivos);
+            }
+        }
+    }
+
+    fn panel_proyecto(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         titulo(ui, "Proyecto");
         let ancho = (ui.available_width() - ui.spacing().item_spacing.x) / 2.0;
@@ -674,15 +722,24 @@ impl Interfaz {
             ui.add(egui::Button::new(RichText::new(texto).size(12.0)).min_size(vec2(ancho, 28.0)))
         };
         ui.horizontal(|ui| {
-            if accion(ui, "Nuevo").clicked() {
+            if accion(ui, "Nuevo")
+                .on_hover_text("Nuevo proyecto (Ctrl+N)")
+                .clicked()
+            {
                 self.pedir(&ctx, Accion::Nuevo);
             }
-            if accion(ui, "Abrir").clicked() {
+            if accion(ui, "Abrir")
+                .on_hover_text("Abrir la carpeta de un proyecto (Ctrl+O)")
+                .clicked()
+            {
                 self.pedir(&ctx, Accion::Abrir);
             }
         });
         ui.horizontal(|ui| {
-            if accion(ui, "Guardar").clicked() {
+            if accion(ui, "Guardar")
+                .on_hover_text("Guardar todos los archivos (Ctrl+S)")
+                .clicked()
+            {
                 self.guardar(false);
             }
             let exportar = accion(ui, "Exportar ▾");
@@ -693,30 +750,130 @@ impl Interfaz {
             });
         });
         ui.add_space(14.0);
-        match &self.ruta {
-            Some(ruta) => {
-                let nombre = ruta.file_name().unwrap_or_default().to_string_lossy();
-                ui.label(RichText::new(nombre).size(12.0).strong());
-                if let Some(carpeta) = ruta.parent() {
-                    vacio(ui, &carpeta.display().to_string());
+
+        // Carpeta y botón para crear archivos
+        let carpeta = match &self.proyecto.carpeta {
+            Some(c) => c
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned(),
+            None => "Sin guardar".into(),
+        };
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(carpeta).size(12.0).strong());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .small_button("+")
+                    .on_hover_text("Nuevo archivo")
+                    .clicked()
+                {
+                    self.nombrando = Some((None, String::new()));
+                    self.error_nombre = None;
                 }
-            }
-            None => vacio(ui, "Archivo sin guardar."),
+            });
+        });
+        ui.add_space(4.0);
+        if matches!(self.nombrando, Some((None, _))) {
+            self.campo_nombre(ui);
         }
-        if self.sin_guardar() {
-            ui.add_space(4.0);
-            vacio(ui, "● Cambios sin guardar");
-        }
+
+        // Archivos
+        let nombres: Vec<String> = self
+            .proyecto
+            .archivos
+            .iter()
+            .map(|a| {
+                let marca = if a.sin_guardar() { " ●" } else { "" };
+                format!("{}{marca}", a.nombre)
+            })
+            .collect();
+        egui::ScrollArea::vertical()
+            .max_height((ui.available_height() - 50.0).max(60.0))
+            .show(ui, |ui| {
+                for (i, texto) in nombres.into_iter().enumerate() {
+                    if matches!(self.nombrando, Some((Some(j), _)) if j == i) {
+                        self.campo_nombre(ui);
+                        continue;
+                    }
+                    let boton = egui::Button::selectable(i == self.proyecto.activo, texto)
+                        .min_size(vec2(ui.available_width(), 0.0));
+                    let r = ui.add(boton);
+                    if r.clicked() && i != self.proyecto.activo {
+                        self.abrir_archivo(i);
+                    }
+                    r.context_menu(|ui| {
+                        if ui.button("Renombrar…").clicked() {
+                            let a = &self.proyecto.archivos[i].nombre;
+                            let base = a.strip_suffix(".SA").unwrap_or(a).to_string();
+                            self.nombrando = Some((Some(i), base));
+                            self.error_nombre = None;
+                        }
+                        if ui.button("Eliminar…").clicked() {
+                            self.borrar = Some(i);
+                        }
+                    });
+                }
+            });
+
+        ui.add_space(8.0);
+        let ejemplos = ui.add(
+            egui::Button::new(RichText::new("Agregar ejemplo ▾").size(12.0))
+                .min_size(vec2(ui.available_width(), 28.0)),
+        );
+        egui::Popup::menu(&ejemplos).show(|ui| self.lista_de_ejemplos(ui));
     }
 
-    /// Nombre del archivo para la cabecera del editor
-    fn nombre_archivo(&self) -> String {
-        let nombre = self.ruta.as_ref().and_then(|r| r.file_name()).map_or_else(
-            || "sin título".to_string(),
-            |n| n.to_string_lossy().into_owned(),
+    /// Campo de texto para el nombre de un archivo nuevo o del que se renombra.
+    /// Enter lo confirma; Escape o un click afuera lo cancela.
+    fn campo_nombre(&mut self, ui: &mut egui::Ui) {
+        let Some((destino, mut nombre)) = self.nombrando.take() else {
+            return;
+        };
+        let r = ui.add(
+            egui::TextEdit::singleline(&mut nombre)
+                .hint_text("Nombre (ej. Mux4)")
+                .desired_width(f32::INFINITY),
         );
-        let marca = if self.sin_guardar() { " ●" } else { "" };
-        format!("Código — {nombre}{marca}")
+        if r.changed() {
+            self.error_nombre = None;
+        }
+        let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if r.lost_focus() && enter {
+            let hecho = match destino {
+                None => self.proyecto.crear(&nombre),
+                Some(i) => self.proyecto.renombrar(i, &nombre),
+            };
+            match hecho {
+                Ok(()) => {
+                    // Al renombrar sigue el mismo circuito: solo cambian los nombres en Problemas
+                    if destino.is_none() {
+                        self.recompilar_desde_cero();
+                    } else {
+                        self.compilar();
+                    }
+                    return;
+                }
+                Err(e) => self.error_nombre = Some(e),
+            }
+        } else if r.lost_focus() {
+            self.error_nombre = None;
+            return;
+        } else if !r.has_focus() {
+            r.request_focus();
+        }
+        if let Some(error) = &self.error_nombre {
+            ui.label(RichText::new(error).size(11.0).color(paleta(ui).tenue));
+        }
+        ui.add_space(4.0);
+        self.nombrando = Some((destino, nombre));
+    }
+
+    /// Nombre del archivo abierto para la cabecera del editor
+    fn nombre_archivo(&self) -> String {
+        let a = self.proyecto.actual();
+        let marca = if a.sin_guardar() { " ●" } else { "" };
+        format!("Código — {}{marca}", a.nombre)
     }
 }
 
@@ -766,7 +923,8 @@ impl Interfaz {
 
     fn editor(&mut self, ui: &mut egui::Ui) {
         cabecera(ui, &self.nombre_archivo());
-        let id = egui::Id::unique("editor");
+        // Un id por archivo: cada uno tiene su propio historial de deshacer
+        let id = egui::Id::unique(("editor", self.proyecto.actual().nombre.as_str()));
         // Lo que pidió el menú Editar: se le da el foco al editor y se le pasa el evento
         if let Some(evento) = self.para_editor.take() {
             ui.memory_mut(|m| m.request_focus(id));
@@ -774,7 +932,7 @@ impl Interfaz {
         }
         egui::ScrollArea::vertical().show(ui, |ui| {
             let r = ui.add(
-                egui::TextEdit::multiline(&mut self.codigo)
+                egui::TextEdit::multiline(&mut self.proyecto.actual_mut().codigo)
                     .id(id)
                     .code_editor()
                     .desired_width(f32::INFINITY)
@@ -802,7 +960,14 @@ impl Interfaz {
             y += 18.0;
         }
         match &self.red {
-            Some(red) => dibujar(ui, rect, red, &self.valores, &mut self.entradas),
+            Some(red) => dibujar(
+                ui,
+                rect,
+                red,
+                &self.valores,
+                &mut self.entradas,
+                &mut self.posiciones,
+            ),
             None => {
                 p.text(
                     rect.center(),
@@ -824,10 +989,17 @@ impl Interfaz {
             ("+", 29.0),
         ] {
             x -= ancho;
-            ui.put(
+            let r = ui.put(
                 Rect::from_min_size(pos2(x, y), vec2(ancho, 27.0)),
                 egui::Button::new(RichText::new(texto).size(11.0).color(c.tenue)),
             );
+            // ponytail: Ajustar y el zoom siguen sin función
+            if texto == "Reordenar"
+                && r.on_hover_text("Devuelve las piezas movidas a su lugar")
+                    .clicked()
+            {
+                self.posiciones.clear();
+            }
             x -= 4.0;
         }
     }
@@ -988,13 +1160,14 @@ fn invertida(c: Compuerta) -> bool {
     )
 }
 
-/// Columna de cada nodo, al estilo de una red neuronal: entradas a la izquierda, cada
-/// compuerta una columna después de la más lejana que la alimenta y salidas al final.
+/// Columna de cada pieza, al estilo de una red neuronal: lo que no tiene entradas a
+/// la izquierda, cada pieza una columna después de la más lejana que la alimenta y
+/// las salidas al final. `fuentes[i]` son las piezas que alimentan a `i`.
 // ponytail: dentro de cada columna van en orden de aparición, sin minimizar cruces
-fn columnas(red: &Netlist) -> Vec<usize> {
+fn columnas(fuentes: &[Vec<usize>], salida: &[bool]) -> Vec<usize> {
     fn profundidad(
         i: usize,
-        red: &Netlist,
+        fuentes: &[Vec<usize>],
         col: &mut [Option<usize>],
         visitando: &mut [bool],
     ) -> usize {
@@ -1005,39 +1178,31 @@ fn columnas(red: &Netlist) -> Vec<usize> {
             return 0; // realimentación: no empuja la columna
         }
         visitando[i] = true;
-        let n = &red.nodos[i];
-        let c = match n.tipo {
-            Tipo::Entrada(_) | Tipo::Constante(_) => 0,
-            _ => {
-                let mas_lejana = n
-                    .entradas
-                    .iter()
-                    .map(|&e| profundidad(e, red, col, visitando));
-                1 + mas_lejana.max().unwrap_or(0)
-            }
-        };
+        let c = fuentes[i]
+            .iter()
+            .map(|&f| profundidad(f, fuentes, col, visitando) + 1)
+            .max()
+            .unwrap_or(0);
         visitando[i] = false;
         col[i] = Some(c);
         c
     }
 
-    let total = red.nodos.len();
+    let total = fuentes.len();
     let mut col = vec![None; total];
     let mut visitando = vec![false; total];
     let mut cols: Vec<usize> = (0..total)
-        .map(|i| profundidad(i, red, &mut col, &mut visitando))
+        .map(|i| profundidad(i, fuentes, &mut col, &mut visitando))
         .collect();
-    let es_salida = |n: &Nodo| matches!(n.tipo, Tipo::Salida(_));
-    let ultima = red
-        .nodos
+    let ultima = cols
         .iter()
-        .zip(&cols)
-        .filter(|(n, _)| !es_salida(n))
-        .map(|(_, &c)| c + 1)
+        .zip(salida)
+        .filter(|&(_, &s)| !s)
+        .map(|(&c, _)| c + 1)
         .max()
         .unwrap_or(0);
-    for (n, c) in red.nodos.iter().zip(&mut cols) {
-        if es_salida(n) {
+    for (c, &s) in cols.iter_mut().zip(salida) {
+        if s {
             *c = ultima;
         }
     }
@@ -1087,13 +1252,117 @@ fn contorno(c: Compuerta, r: Rect) -> Vec<Pos2> {
     }
 }
 
-fn dibujar(ui: &mut egui::Ui, rect: Rect, red: &Netlist, valores: &[bool], entradas: &mut [bool]) {
+/// Lo que se ve en el lienzo: un nodo suelto o la caja de una instancia (sus
+/// compuertas van adentro y no se dibujan).
+#[derive(Clone, Copy)]
+enum Pieza {
+    Nodo(usize),
+    Caja(usize),
+}
+
+/// Para recordar dónde la dejó el usuario aunque el código cambie
+fn clave(red: &Netlist, pieza: Pieza) -> String {
+    match pieza {
+        Pieza::Caja(g) => format!("caja {}", red.instancias[g].nombre),
+        Pieza::Nodo(i) => {
+            let n = &red.nodos[i];
+            match &n.tipo {
+                Tipo::Entrada(x) => format!("in {x}"),
+                Tipo::Salida(x) => format!("out {x}"),
+                _ if !n.nombre.is_empty() => format!("= {}", n.nombre),
+                // ponytail: las anidadas se ubican por posición; si cambia el código pueden saltar
+                _ => format!("#{i}"),
+            }
+        }
+    }
+}
+
+/// Lo que se ve al pasar el mouse
+fn descripcion(red: &Netlist, pieza: Pieza) -> String {
+    match pieza {
+        Pieza::Caja(g) => {
+            let inst = &red.instancias[g];
+            format!("{}: {}", inst.nombre, inst.circuito)
+        }
+        Pieza::Nodo(i) => {
+            let n = &red.nodos[i];
+            match &n.tipo {
+                Tipo::Entrada(x) => format!("Entrada {x} (click para cambiarla)"),
+                Tipo::Salida(x) => format!("Salida {x}"),
+                Tipo::Constante(v) => format!("Constante {}", *v as u8),
+                Tipo::Compuerta(g) if n.nombre.is_empty() => g.nombre().to_uppercase(),
+                Tipo::Compuerta(g) => format!("{} → {}", g.nombre().to_uppercase(), n.nombre),
+            }
+        }
+    }
+}
+
+/// Altura del pin `k` de `n` repartidos en el lado de `r`
+fn altura_pin(r: Rect, k: usize, n: usize) -> f32 {
+    r.top() + r.height() * (k + 1) as f32 / (n + 1) as f32
+}
+
+fn dibujar(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    red: &Netlist,
+    valores: &[bool],
+    entradas: &mut [bool],
+    posiciones: &mut HashMap<String, Pos2>,
+) {
     let c = paleta(ui);
     let p = ui.painter_at(rect);
-    let total = red.nodos.len();
-    let cols = columnas(red);
 
-    // Fila de cada nodo dentro de su columna
+    // Piezas: los nodos sueltos y una caja por instancia
+    let mut piezas: Vec<Pieza> = (0..red.nodos.len())
+        .filter(|&i| red.nodos[i].instancia.is_none())
+        .map(Pieza::Nodo)
+        .collect();
+    let primera_caja = piezas.len();
+    piezas.extend((0..red.instancias.len()).map(Pieza::Caja));
+    let total = piezas.len();
+    let mut pieza_de = vec![0; red.nodos.len()];
+    for (j, pieza) in piezas.iter().enumerate() {
+        if let Pieza::Nodo(i) = *pieza {
+            pieza_de[i] = j;
+        }
+    }
+    for (i, n) in red.nodos.iter().enumerate() {
+        if let Some(g) = n.instancia {
+            pieza_de[i] = primera_caja + g;
+        }
+    }
+    // Nodos que alimentan cada pieza, en el orden de sus pines
+    let fuentes: Vec<Vec<usize>> = piezas
+        .iter()
+        .map(|pieza| match *pieza {
+            Pieza::Nodo(i) => red.nodos[i].entradas.clone(),
+            Pieza::Caja(g) => red.instancias[g].entradas.iter().map(|e| e.1).collect(),
+        })
+        .collect();
+    let tam = |pieza: Pieza| match pieza {
+        Pieza::Nodo(i) => tamano(&red.nodos[i]),
+        Pieza::Caja(g) => {
+            let inst = &red.instancias[g];
+            let pines = inst.entradas.len().max(inst.salidas.len());
+            vec2(
+                (inst.circuito.len() as f32 * 7.0 + 20.0).max(96.0),
+                (pines as f32 * 18.0 + 30.0).max(48.0),
+            )
+        }
+    };
+
+    let por_pieza: Vec<Vec<usize>> = fuentes
+        .iter()
+        .map(|f| f.iter().map(|&n| pieza_de[n]).collect())
+        .collect();
+    let salida: Vec<bool> = piezas
+        .iter()
+        .map(|pieza| matches!(*pieza, Pieza::Nodo(i) if matches!(red.nodos[i].tipo, Tipo::Salida(_))))
+        .collect();
+    let cols = columnas(&por_pieza, &salida);
+
+    // Fila de cada pieza dentro de su columna
     let num_cols = cols.iter().max().map_or(0, |m| m + 1);
     let mut por_columna = vec![0; num_cols];
     let filas: Vec<usize> = cols
@@ -1107,59 +1376,101 @@ fn dibujar(ui: &mut egui::Ui, rect: Rect, red: &Netlist, valores: &[bool], entra
 
     // Centrado en el lienzo; si no cabe, empieza arriba a la izquierda
     // ponytail: sin zoom ni desplazamiento; llegan con los botones del lienzo
-    let tam = vec2(
+    let medida = vec2(
         num_cols.saturating_sub(1) as f32 * ANCHO_COLUMNA,
         max_filas.saturating_sub(1) as f32 * ALTO_FILA,
     );
     let origen = pos2(
-        (rect.center().x - tam.x / 2.0).max(rect.left() + 70.0),
-        (rect.center().y - tam.y / 2.0).max(rect.top() + 40.0),
+        (rect.center().x - medida.x / 2.0).max(rect.left() + 70.0),
+        (rect.center().y - medida.y / 2.0).max(rect.top() + 40.0),
     );
-    let centros: Vec<Pos2> = (0..total)
-        .map(|i| {
-            let hueco = (max_filas - por_columna[cols[i]]) as f32 * ALTO_FILA / 2.0;
+    let mut centros: Vec<Pos2> = (0..total)
+        .map(|j| {
+            let hueco = (max_filas - por_columna[cols[j]]) as f32 * ALTO_FILA / 2.0;
             origen
                 + vec2(
-                    cols[i] as f32 * ANCHO_COLUMNA,
-                    filas[i] as f32 * ALTO_FILA + hueco,
+                    cols[j] as f32 * ANCHO_COLUMNA,
+                    filas[j] as f32 * ALTO_FILA + hueco,
                 )
         })
         .collect();
-    let caja = |i: usize| Rect::from_center_size(centros[i], tamano(&red.nodos[i]));
+
+    // Arrastrar mueve la pieza; click en una entrada la cambia; encima, su nombre
+    let mut k = 0;
+    for (j, &pieza) in piezas.iter().enumerate() {
+        let clave = clave(red, pieza);
+        if let Some(&guardada) = posiciones.get(&clave) {
+            centros[j] = guardada + rect.min.to_vec2();
+        }
+        let r = ui.interact(
+            Rect::from_center_size(centros[j], tam(pieza)),
+            ui.scope_id().with(&clave),
+            Sense::click_and_drag(),
+        );
+        if r.dragged() {
+            centros[j] = (centros[j] + r.drag_delta()).clamp(rect.min, rect.max);
+            posiciones.insert(clave, centros[j] - rect.min.to_vec2());
+        }
+        if matches!(pieza, Pieza::Nodo(i) if matches!(red.nodos[i].tipo, Tipo::Entrada(_))) {
+            if r.clicked() {
+                entradas[k] = !entradas[k];
+            }
+            k += 1;
+        }
+        r.on_hover_text(descripcion(red, pieza))
+            .on_hover_cursor(egui::CursorIcon::Grab);
+    }
+
+    let caja = |j: usize| Rect::from_center_size(centros[j], tam(piezas[j]));
     let valor = |i: usize| valores.get(i).copied().unwrap_or(false);
     let color = |v: bool| if v { c.uno } else { c.tenue };
 
-    // Dónde sale la señal de un nodo
-    let pin_salida = |i: usize| {
-        let r = caja(i);
-        let burbuja = matches!(red.nodos[i].tipo, Tipo::Compuerta(g) if invertida(g));
-        pos2(r.right() + if burbuja { 8.0 } else { 0.0 }, r.center().y)
-    };
-    // Dónde llega la entrada `k` de un nodo
-    let pin_entrada = |i: usize, k: usize| {
-        let r = caja(i);
-        let n = &red.nodos[i];
-        let s = (k + 1) as f32 / (n.entradas.len() + 1) as f32;
-        let y = r.top() + r.height() * s;
-        // Las OR y XOR tienen la parte de atrás curva
-        let atras = match n.tipo {
-            Tipo::Compuerta(Compuerta::Or | Compuerta::Nor | Compuerta::Xor | Compuerta::Xnor) => {
-                0.5 * r.width() * s * (1.0 - s)
+    // Dónde sale la señal del nodo `f`: de su pieza o del pin de la caja que lo tiene
+    let pin_salida = |f: usize| {
+        let j = pieza_de[f];
+        let r = caja(j);
+        match piezas[j] {
+            Pieza::Nodo(i) => {
+                let burbuja = matches!(red.nodos[i].tipo, Tipo::Compuerta(g) if invertida(g));
+                pos2(r.right() + if burbuja { 8.0 } else { 0.0 }, r.center().y)
             }
-            _ => 0.0,
+            Pieza::Caja(g) => {
+                let salidas = &red.instancias[g].salidas;
+                let k = salidas.iter().position(|s| s.1 == f).unwrap_or(0);
+                pos2(r.right(), altura_pin(r, k, salidas.len()))
+            }
+        }
+    };
+    // Dónde llega la entrada `k` de la pieza `j`
+    let pin_entrada = |j: usize, k: usize| {
+        let r = caja(j);
+        let n = fuentes[j].len();
+        let y = altura_pin(r, k, n);
+        // Las OR y XOR tienen la parte de atrás curva
+        let atras = match piezas[j] {
+            Pieza::Nodo(i) => match red.nodos[i].tipo {
+                Tipo::Compuerta(
+                    Compuerta::Or | Compuerta::Nor | Compuerta::Xor | Compuerta::Xnor,
+                ) => {
+                    let s = (k + 1) as f32 / (n + 1) as f32;
+                    0.5 * r.width() * s * (1.0 - s)
+                }
+                _ => 0.0,
+            },
+            Pieza::Caja(_) => 0.0,
         };
         pos2(r.left() + atras, y)
     };
 
     // Cables (debajo de los componentes), en ángulo recto
     let abajo = (0..total)
-        .map(|i| caja(i).bottom())
+        .map(|j| caja(j).bottom())
         .fold(rect.top(), f32::max);
     let mut lazos = 0;
-    for (i, n) in red.nodos.iter().enumerate() {
-        for (k, &fuente) in n.entradas.iter().enumerate() {
+    for (j, fs) in fuentes.iter().enumerate() {
+        for (k, &fuente) in fs.iter().enumerate() {
             let a = pin_salida(fuente);
-            let b = pin_entrada(i, k);
+            let b = pin_entrada(j, k);
             let puntos = if b.x > a.x + 12.0 {
                 let x = (b.x - 14.0 - 5.0 * k as f32).max(a.x + 6.0);
                 vec![a, pos2(x, a.y), pos2(x, b.y), b]
@@ -1185,20 +1496,55 @@ fn dibujar(ui: &mut egui::Ui, rect: Rect, red: &Netlist, valores: &[bool], entra
     let texto = |pos: Pos2, alinear: Align2, t: &str| {
         p.text(pos, alinear, t, FontId::monospace(12.0), c.tinta);
     };
-    let mut k = 0;
-    for (i, n) in red.nodos.iter().enumerate() {
-        let r = caja(i);
-        let v = valor(i);
-        match &n.tipo {
-            Tipo::Entrada(nombre) => {
-                // Interruptor: un click lo cambia
-                if ui
-                    .interact(r, ui.scope_id().with(("entrada", i)), Sense::click())
-                    .clicked()
-                {
-                    entradas[k] = !entradas[k];
+    for (j, &pieza) in piezas.iter().enumerate() {
+        let r = caja(j);
+        let i = match pieza {
+            Pieza::Nodo(i) => i,
+            Pieza::Caja(g) => {
+                // Caja con el nombre del circuito, la instancia arriba y los pines rotulados
+                let inst = &red.instancias[g];
+                let pequeno = FontId::monospace(10.0);
+                p.rect(r, 6.0, c.panel, trazo, StrokeKind::Inside);
+                p.text(
+                    r.center_top() - vec2(0.0, 4.0),
+                    Align2::CENTER_BOTTOM,
+                    &inst.nombre,
+                    FontId::monospace(11.0),
+                    c.tenue,
+                );
+                p.text(
+                    r.center_top() + vec2(0.0, 5.0),
+                    Align2::CENTER_TOP,
+                    &inst.circuito,
+                    FontId::proportional(11.0),
+                    c.tinta,
+                );
+                for (k, (nombre, _)) in inst.entradas.iter().enumerate() {
+                    let y = altura_pin(r, k, inst.entradas.len());
+                    p.text(
+                        pos2(r.left() + 5.0, y),
+                        Align2::LEFT_CENTER,
+                        nombre,
+                        pequeno.clone(),
+                        c.tenue,
+                    );
                 }
-                k += 1;
+                for (k, (nombre, _)) in inst.salidas.iter().enumerate() {
+                    let y = altura_pin(r, k, inst.salidas.len());
+                    p.text(
+                        pos2(r.right() - 5.0, y),
+                        Align2::RIGHT_CENTER,
+                        nombre,
+                        pequeno.clone(),
+                        c.tenue,
+                    );
+                }
+                continue;
+            }
+        };
+        let v = valor(i);
+        match &red.nodos[i].tipo {
+            Tipo::Entrada(nombre) => {
                 let fondo = if v { c.uno } else { c.panel };
                 p.rect(r, 5.0, fondo, trazo, StrokeKind::Inside);
                 texto(r.center(), Align2::CENTER_CENTER, if v { "1" } else { "0" });
