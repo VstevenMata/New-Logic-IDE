@@ -14,6 +14,8 @@ if ($PSVersionTable.PSVersion.Major -lt 6) { $ProgressPreference = 'SilentlyCont
 $Repo = 'VstevenMata/New-Logic-IDE'
 $Nombre = 'LogicSM'
 $Cmd = 'logicsm'
+# Como Code.exe en VS Code: en la carpeta se ve LogicSM, y el comando logicsm igual funciona (Windows no distingue mayúsculas)
+$ArchivoExe = 'LogicSM.exe'
 $Acceso = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\LogicSM.lnk"
 # Carpetas de datos de la app: la desinstalación las borra. Los proyectos de los estudiantes NO deben guardarse aquí.
 $Datos = @("$env:APPDATA\LogicSM", "$env:LOCALAPPDATA\LogicSM")
@@ -60,7 +62,7 @@ function QuitarDelPath($carpeta) {
 function Instalar {
     if (-not $Version) { throw 'no hay ningún release publicado todavía, o no hay conexión a internet' }
     $archivo = "$Cmd-windows-$Arq.exe"
-    $exe = Join-Path $Raiz "$Cmd.exe"
+    $exe = Join-Path $Raiz $ArchivoExe
     try {
         [void](New-Item -ItemType Directory -Force -Path $Raiz)
         $prueba = Join-Path $Raiz '.prueba'; [IO.File]::WriteAllText($prueba, ''); [IO.File]::Delete($prueba)
@@ -70,13 +72,14 @@ function Instalar {
     $tmp = "$exe.tmp"
     try { Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/$Repo/releases/download/$Version/$archivo" -OutFile $tmp }
     catch { Remove-Item $tmp -ErrorAction SilentlyContinue; throw "no se pudo descargar $archivo (puede que no exista para windows $Arq)" }
-    try { Move-Item -Force $tmp $exe }
+    # Se borra antes para que quede con mayúsculas aunque ya hubiera un logicsm.exe (Windows no las distingue al reemplazar)
+    try { if (Test-Path $exe) { Remove-Item -Force $exe }; Move-Item -Force $tmp $exe }
     catch { Remove-Item $tmp -ErrorAction SilentlyContinue; throw "cierra $Nombre y vuelve a intentarlo" }
     Ok "Descargado $Nombre $Version (windows $Arq)"
 
     # Si antes estaba en otra carpeta, se quita la copia vieja
     if ($Previa -and $Previa -ne $Raiz) {
-        Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $Previa "$Cmd.exe")
+        Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $Previa $ArchivoExe)
         QuitarDelPath $Previa
     }
     $path = [Environment]::GetEnvironmentVariable('Path', 'User')
@@ -106,7 +109,7 @@ function Instalar {
 
 # Solo se borra lo que creó el instalador: si el .exe estaba en otra carpeta, esa carpeta se queda
 function Quitar {
-    $exe = Join-Path $Previa "$Cmd.exe"
+    $exe = Join-Path $Previa $ArchivoExe
     # Si la app está abierta, su .exe no se puede borrar
     Get-Process $Cmd -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe } | Stop-Process -Force
     Start-Sleep -Milliseconds 300
@@ -134,7 +137,7 @@ function Principal {
 
     # Instalación existente: la carpeta del PATH del usuario que tiene logicsm.exe
     $script:Previa = ([Environment]::GetEnvironmentVariable('Path', 'User') -split ';') |
-        Where-Object { $_ -and (Test-Path (Join-Path $_ "$Cmd.exe")) } | Select-Object -First 1
+        Where-Object { $_ -and (Test-Path (Join-Path $_ $ArchivoExe)) } | Select-Object -First 1
     $script:Raiz = if ($Dir) { [IO.Path]::GetFullPath($Dir).TrimEnd('\') }
                    elseif ($Previa) { $Previa }
                    else { "$env:LOCALAPPDATA\Programs\LogicSM" }
