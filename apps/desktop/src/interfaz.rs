@@ -84,7 +84,11 @@ pub fn estilo(ctx: &egui::Context) {
             v.selection.bg_fill = c.lavanda_fondo;
             v.selection.stroke = Stroke::new(1.0, c.lavanda);
             v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, c.linea);
-            for w in [&mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active] {
+            for w in [
+                &mut v.widgets.inactive,
+                &mut v.widgets.hovered,
+                &mut v.widgets.active,
+            ] {
                 w.corner_radius = CornerRadius::same(5);
                 w.bg_stroke = Stroke::new(1.0, c.linea);
                 w.expansion = 0.0;
@@ -106,17 +110,29 @@ impl eframe::App for Interfaz {
         egui::Panel::top("barra")
             .exact_size(48.0)
             .resizable(false)
-            .frame(Frame::new().fill(c.panel).inner_margin(Margin::symmetric(14, 0)))
+            .frame(
+                Frame::new()
+                    .fill(c.panel)
+                    .inner_margin(Margin::symmetric(14, 0)),
+            )
             .show(ui, barra_superior);
         egui::Panel::left("proyecto")
             .exact_size(174.0)
             .resizable(false)
-            .frame(Frame::new().fill(c.panel).inner_margin(Margin::symmetric(14, 15)))
+            .frame(
+                Frame::new()
+                    .fill(c.panel)
+                    .inner_margin(Margin::symmetric(14, 15)),
+            )
             .show(ui, proyecto);
         egui::Panel::right("senales")
             .exact_size(222.0)
             .resizable(false)
-            .frame(Frame::new().fill(c.panel).inner_margin(Margin::symmetric(14, 15)))
+            .frame(
+                Frame::new()
+                    .fill(c.panel)
+                    .inner_margin(Margin::symmetric(14, 15)),
+            )
             .show(ui, senales);
         egui::Panel::bottom("pestanas")
             .exact_size(166.0)
@@ -176,7 +192,9 @@ fn menu(ui: &mut egui::Ui) {
     ui.menu_button("Archivo", |ui| {
         opcion(ui, "Nuevo proyecto", "Ctrl+N");
         opcion(ui, "Abrir…", "Ctrl+O");
-        ui.menu_button("Abrir reciente", |ui| deshabilitada(ui, "Sin proyectos recientes"));
+        ui.menu_button("Abrir reciente", |ui| {
+            deshabilitada(ui, "Sin proyectos recientes")
+        });
         ui.separator();
         opcion(ui, "Guardar", "Ctrl+S");
         opcion(ui, "Guardar como…", "Ctrl+Shift+S");
@@ -278,7 +296,10 @@ fn cabecera(ui: &mut egui::Ui, texto: &str) {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 38.0), Sense::hover());
     let p = ui.painter();
     p.rect_filled(rect, 0.0, c.panel);
-    p.line_segment([rect.left_bottom(), rect.right_bottom()], Stroke::new(1.0, c.linea));
+    p.line_segment(
+        [rect.left_bottom(), rect.right_bottom()],
+        Stroke::new(1.0, c.linea),
+    );
     p.text(
         pos2(rect.left() + 13.0, rect.center().y),
         Align2::LEFT_CENTER,
@@ -327,7 +348,12 @@ fn lienzo(ui: &mut egui::Ui) {
     // Controles del lienzo, abajo a la derecha
     let mut x = rect.right() - 12.0;
     let y = rect.bottom() - 39.0;
-    for (texto, ancho) in [("Reordenar", 82.0), ("Ajustar", 64.0), ("−", 29.0), ("+", 29.0)] {
+    for (texto, ancho) in [
+        ("Reordenar", 82.0),
+        ("Ajustar", 64.0),
+        ("−", 29.0),
+        ("+", 29.0),
+    ] {
         x -= ancho;
         ui.put(
             Rect::from_min_size(pos2(x, y), vec2(ancho, 27.0)),
@@ -341,7 +367,10 @@ fn pestanas(ui: &mut egui::Ui) {
     let c = paleta(ui);
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 37.0), Sense::hover());
     let p = ui.painter();
-    p.line_segment([rect.left_bottom(), rect.right_bottom()], Stroke::new(1.0, c.linea));
+    p.line_segment(
+        [rect.left_bottom(), rect.right_bottom()],
+        Stroke::new(1.0, c.linea),
+    );
     let mut x = rect.left() + 15.0;
     for (i, nombre) in ["Problemas", "Tabla de verdad", "Ondas", "Salida"]
         .into_iter()
@@ -357,7 +386,10 @@ fn pestanas(ui: &mut egui::Ui) {
         );
         if i == 0 {
             let y = rect.bottom() - 1.0;
-            p.line_segment([pos2(r.left(), y), pos2(r.right(), y)], Stroke::new(2.0, c.lavanda));
+            p.line_segment(
+                [pos2(r.left(), y), pos2(r.right(), y)],
+                Stroke::new(2.0, c.lavanda),
+            );
         }
         x = r.right() + 21.0;
     }
@@ -387,10 +419,14 @@ fn boton(ui: &mut egui::Ui, texto: &str, icono: Icono, principal: bool) -> egui:
     };
     // Los espacios dejan lugar para el ícono
     let r = ui.add(
-        egui::Button::new(RichText::new(format!("     {texto}")).size(12.5).color(color))
-            .fill(fondo)
-            .stroke(Stroke::new(1.0, borde))
-            .min_size(vec2(0.0, 28.0)),
+        egui::Button::new(
+            RichText::new(format!("     {texto}"))
+                .size(12.5)
+                .color(color),
+        )
+        .fill(fondo)
+        .stroke(Stroke::new(1.0, borde))
+        .min_size(vec2(0.0, 28.0)),
     );
     let centro = pos2(r.rect.left() + 15.0, r.rect.center().y);
     let p = ui.painter();
@@ -420,7 +456,9 @@ fn boton(ui: &mut egui::Ui, texto: &str, icono: Icono, principal: bool) -> egui:
                 let a = g.to_radians();
                 centro + radio * vec2(-a.cos(), a.sin())
             };
-            let arco: Vec<Pos2> = (0..=24).map(|i| punto(40.0 - 290.0 * i as f32 / 24.0)).collect();
+            let arco: Vec<Pos2> = (0..=24)
+                .map(|i| punto(40.0 - 290.0 * i as f32 / 24.0))
+                .collect();
             let fin = arco[arco.len() - 1];
             let a = (40.0_f32 - 290.0).to_radians();
             // Tangente en el sentido del recorrido y dirección hacia afuera del círculo
