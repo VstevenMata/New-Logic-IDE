@@ -3,6 +3,7 @@
 //! No se detiene en el primer error: los junta y sigue, así el editor puede
 //! resaltar el resto del archivo.
 
+use crate::Error;
 use std::ops::Range;
 
 /// Las 22 palabras reservadas del lenguaje.
@@ -98,19 +99,12 @@ pub struct Token {
     pub rango: Range<usize>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ErrorLexico {
-    pub mensaje: String,
-    pub rango: Range<usize>,
-}
-
 /// Devuelve los tokens (siempre termina en `Tipo::Fin`) y los errores encontrados.
-pub fn tokenizar(fuente: &str) -> (Vec<Token>, Vec<ErrorLexico>) {
+pub fn tokenizar(fuente: &str) -> (Vec<Token>, Vec<Error>) {
     let b = fuente.as_bytes();
     let mut tokens = Vec::new();
     let mut errores = Vec::new();
-    let mut error =
-        |mensaje: String, rango: Range<usize>| errores.push(ErrorLexico { mensaje, rango });
+    let mut error = |mensaje: String, rango: Range<usize>| errores.push(Error { mensaje, rango });
     let mut i = 0;
 
     while i < b.len() {

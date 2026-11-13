@@ -1,95 +1,89 @@
-//! Simulador por eventos con valores 0, 1, X y Z sobre el Circuit IR.
+//! Simulador: calcula los valores de un circuito ya compilado.
 
-/// Compuertas predefinidas del lenguaje (`A3 = and.set(3);`, `not(X)`…).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Compuerta {
-    And,
-    Or,
-    Xor,
-    Nand,
-    Nor,
-    Xnor,
-    Not,
-    Buffer,
-}
+pub use logicsm_core::Compuerta;
+use logicsm_core::netlist::{Netlist, Tipo};
 
-use Compuerta::*;
-
-impl Compuerta {
-    pub const TODAS: [Compuerta; 8] = [And, Or, Xor, Nand, Nor, Xnor, Not, Buffer];
-
-    pub fn nombre(self) -> &'static str {
-        match self {
-            And => "and",
-            Or => "or",
-            Xor => "xor",
-            Nand => "nand",
-            Nor => "nor",
-            Xnor => "xnor",
-            Not => "not",
-            Buffer => "buffer",
+/// Calcula el valor de cada nodo de la red.
+///
+/// `valores` guarda el estado entre llamadas (la memoria de los flip-flops) y
+/// `entradas` va en el orden de los `in`. Devuelve `false` si el circuito oscila.
+// ponytail: solo 0 y 1, empezando en 0; X, Z y retardos llegan con el simulador por eventos
+pub fn simular(red: &Netlist, valores: &mut Vec<bool>, entradas: &[bool]) -> bool {
+    valores.resize(red.nodos.len(), false);
+    let mut entradas = entradas.iter();
+    for (i, n) in red.nodos.iter().enumerate() {
+        if let Tipo::Entrada(_) = n.tipo {
+            valores[i] = entradas.next().copied().unwrap_or(false);
         }
     }
-
-    pub fn desde_nombre(nombre: &str) -> Option<Self> {
-        Self::TODAS.into_iter().find(|c| c.nombre() == nombre)
-    }
-
-    /// `not` y `buffer` siempre tienen 1 entrada; las demás, 2 o más.
-    pub fn entradas_validas(self, n: usize) -> bool {
-        match self {
-            Not | Buffer => n == 1,
-            _ => n >= 2,
+    // Sin lazos alcanza con una pasada por nivel; si no se estabiliza, oscila.
+    for _ in 0..=red.nodos.len() {
+        let mut cambio = false;
+        for (i, n) in red.nodos.iter().enumerate() {
+            let nuevo = match n.tipo {
+                Tipo::Entrada(_) => continue,
+                Tipo::Constante(v) => v,
+                Tipo::Salida(_) => valores[n.entradas[0]],
+                Tipo::Compuerta(c) => {
+                    let e: Vec<bool> = n.entradas.iter().map(|&e| valores[e]).collect();
+                    c.evaluar(&e)
+                }
+            };
+            if nuevo != valores[i] {
+                valores[i] = nuevo;
+                cambio = true;
+            }
+        }
+        if !cambio {
+            return true;
         }
     }
-
-    // ponytail: solo 0 y 1; X y Z llegan con el simulador por eventos
-    pub fn evaluar(self, entradas: &[bool]) -> bool {
-        let unos = entradas.iter().filter(|&&e| e).count();
-        match self {
-            And => unos == entradas.len(),
-            Or => unos > 0,
-            Xor => unos % 2 == 1,
-            Nand => unos != entradas.len(),
-            Nor => unos == 0,
-            Xnor => unos % 2 == 0,
-            Not => unos == 0,
-            Buffer => unos == 1,
-        }
-    }
+    false
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Salidas de la tabla de verdad, de 000… a 111… (A es el bit más significativo)
-    fn tabla(c: Compuerta, n: usize) -> Vec<u8> {
-        (0..1 << n)
-            .map(|fila| {
-                let e: Vec<bool> = (0..n).map(|i| fila >> (n - 1 - i) & 1 == 1).collect();
-                c.evaluar(&e) as u8
-            })
+    fn salidas(red: &Netlist, valores: &[bool]) -> Vec<bool> {
+        red.nodos
+            .iter()
+            .zip(valores)
+            .filter(|(n, _)| matches!(n.tipo, Tipo::Salida(_)))
+            .map(|(_, &v)| v)
             .collect()
     }
 
     #[test]
-    fn tablas_de_verdad() {
-        assert_eq!(tabla(And, 3), [0, 0, 0, 0, 0, 0, 0, 1]);
-        assert_eq!(tabla(Or, 2), [0, 1, 1, 1]);
-        assert_eq!(tabla(Xor, 3), [0, 1, 1, 0, 1, 0, 0, 1]);
-        assert_eq!(tabla(Nand, 2), [1, 1, 1, 0]);
-        assert_eq!(tabla(Nor, 3), [1, 0, 0, 0, 0, 0, 0, 0]);
-        assert_eq!(tabla(Xnor, 2), [1, 0, 0, 1]);
-        assert_eq!(tabla(Not, 1), [1, 0]);
-        assert_eq!(tabla(Buffer, 1), [0, 1]);
+    fn medio_sumador() {
+        let red = logicsm_core::compilar(
+            "circuit HA { in A, B; out S, C; S = xor(A, B); C = and(A, B); }",
+        )
+        .unwrap();
+        let mut v = Vec::new();
+        for (a, b, s, c) in [(0, 0, 0, 0), (0, 1, 1, 0), (1, 0, 1, 0), (1, 1, 0, 1)] {
+            assert!(simular(&red, &mut v, &[a == 1, b == 1]));
+            assert_eq!(salidas(&red, &v), [s == 1, c == 1]);
+        }
     }
 
     #[test]
-    fn nombres_y_entradas() {
-        assert_eq!(Compuerta::desde_nombre("nor"), Some(Nor));
-        assert_eq!(Compuerta::desde_nombre("NOR"), None);
-        assert!(And.entradas_validas(5) && !And.entradas_validas(1));
-        assert!(Not.entradas_validas(1) && !Not.entradas_validas(2));
+    fn flip_flop_recuerda() {
+        let red = logicsm_core::compilar(
+            "circuit FF { in S, R; out Q; Q = nor(R, Qn); Qn = nor(S, Q); }",
+        )
+        .unwrap();
+        let mut v = Vec::new();
+        // (S, R) → Q: set, mantener, reset, mantener
+        for (s, r, q) in [(1, 0, 1), (0, 0, 1), (0, 1, 0), (0, 0, 0)] {
+            assert!(simular(&red, &mut v, &[s == 1, r == 1]));
+            assert_eq!(salidas(&red, &v), [q == 1]);
+        }
+    }
+
+    #[test]
+    fn detecta_oscilacion() {
+        let red = logicsm_core::compilar("main { out X; X = not(X); }").unwrap();
+        assert!(!simular(&red, &mut Vec::new(), &[]));
     }
 }
