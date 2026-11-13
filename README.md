@@ -18,15 +18,12 @@
 LogicSM es un entorno de escritorio para aprender electrónica digital. En vez de dibujar cables, el circuito se escribe en un lenguaje sencillo, y la app lo dibuja y lo simula automáticamente.
 
 ```cpp
-X = xor.set(2);
-Y = and.set(2);
-
 circuit HalfAdder {
     in A, B;
     out Suma, Acarreo;
 
-    Suma    = X(A, B);
-    Acarreo = Y(A, B);
+    Suma    = xor(A, B);
+    Acarreo = and(A, B);
 }
 ```
 
