@@ -197,13 +197,69 @@ comment     = "//" { char } newline | "/*" { char } "*/" ;
 
 ---
 
+## Herramientas educativas
+
+Funcionan sin IA, con algoritmos exactos dentro del compilador y el simulador. No necesitan internet y nunca dan una respuesta incorrecta.
+
+| Herramienta | Qué hace | Cómo |
+|---|---|---|
+| **Errores con sugerencia** | *"`FlipFlp` no existe, ¿quisiste decir `FlipFlop`?"*, *"AND3 espera 3 entradas, recibió 2"* | Distancia de edición entre nombres; verificación de cantidades y anchos |
+| **Tabla de verdad** | Genera la tabla completa del circuito seleccionado | El simulador prueba todas las combinaciones de entradas |
+| **Verificación** | *"Con A=1, B=0 tu salida da 0 y debería dar 1"* | El estudiante llena la columna "esperado" en el panel de la tabla de verdad y el simulador marca las filas que fallan |
+| **Solución** | A partir de una tabla de verdad, genera el circuito mínimo ya escrito en Logic_F-4:13 | Quine-McCluskey / mapas de Karnaugh |
+| **Equivalencia** | Dice si dos circuitos hacen lo mismo y, si no, muestra la combinación donde difieren | Comparación de tablas de verdad |
+
+---
+
+## Exportación e importación
+
+### Verilog
+
+Verilog es el lenguaje de descripción de hardware (HDL) estándar de la industria para diseñar chips y programar FPGAs. Exportar a Verilog permite:
+
+- cargar un circuito en una **FPGA** y verlo funcionar como hardware real;
+- abrirlo en herramientas profesionales;
+- servir de puente hacia cursos avanzados de diseño digital.
+
+Como el IR es una lista de componentes conectados, la traducción es casi directa:
+
+```verilog
+module HalfAdder(input A, input B, output Sum, output Carry);
+    assign Sum   = A ^ B;
+    assign Carry = A & B;
+endmodule
+```
+
+### LogicCircuit (`.CircuitProject`)
+
+LogicCircuit guarda los proyectos en XML (`.CircuitProject`) con elementos `LogicalCircuit` (cada circuito), `Pin` (entradas y salidas), `CircuitSymbol` (componente colocado en la cuadrícula, con `X`/`Y`) y `Wire` (tramo de cable `X1,Y1 → X2,Y2`). Los cables se conectan **por coordenadas**: un cable está conectado a un pin si su punta cae exactamente sobre él.
+
+- **Exportar** (Logic_F-4:13 → LogicCircuit): la conexión lógica sale del IR y las posiciones del layout por capas, ajustado a la cuadrícula de LogicCircuit. Cada circuito propio se exporta como un `LogicalCircuit`, así que se conserva la jerarquía. Pendiente: confirmar en su esquema (`Schema/CircuitProject.xml`) cómo identifica las compuertas predefinidas y sus atributos.
+- **Importar** (LogicCircuit → Logic_F-4:13): leer el XML, reconstruir las conexiones a partir de la geometría y generar código `.lx`. Así un estudiante puede ver sus circuitos de LogicCircuit escritos como código.
+
+LogicCircuit es GPL-2.0: se implementa un lector/escritor propio del formato, sin copiar su código.
+
+---
+
 ## Arquitectura
 
-### Tecnología
+### Tecnologías
 
-- **Rust** en todo el proyecto.
-- **egui / eframe** para la interfaz nativa de escritorio (Windows, Linux, macOS). Sin webview ni React: el simulador y el lienzo comparten memoria directamente, sin IPC.
-- El resultado es un solo ejecutable por plataforma. Como extra, eframe compila a WASM, lo que permite una versión web.
+**Rust** en todo el proyecto: compilador, simulador e interfaz. Se obtiene un solo ejecutable por plataforma (Windows, Linux, macOS), sin webview ni React. El simulador y el lienzo comparten memoria directamente, sin IPC. Como extra, eframe compila a WASM, lo que permite una versión web.
+
+| Tecnología | Para qué |
+|---|---|
+| `eframe` / `egui` | Ventana, editor, lienzo del circuito y paneles |
+| `egui_dock` | Paneles acoplables tipo IDE |
+| `rfd` | Diálogos nativos de abrir y guardar |
+| `serde` + `serde_json` | Configuración y posiciones del dibujo |
+| `notify` | Vigilar la carpeta del proyecto y recompilar al cambiar un `.lx` |
+| `quick-xml` | Exportar e importar proyectos de LogicCircuit |
+| `cargo test` | Tests del compilador y del simulador |
+| GitHub Actions + `cargo-dist` | Build, tests y ejecutables/instaladores por plataforma |
+| Nix flake | Entorno de desarrollo reproducible (opcional) |
+
+**Escrito por nosotros, sin librerías:** lexer, parser, análisis semántico, IR, simulador, layout por capas, tabla de verdad y Quine-McCluskey.
 
 ### Pipeline del compilador
 
@@ -258,9 +314,9 @@ El editor de código usa el **lexer real** del compilador para el resaltado de s
 3. **Secuenciales:** pulsador, reloj y realimentación (flip-flops con compuertas).
 4. **Visualización:** display 7 segmentos y sonda.
 5. **Buses:** splitters, tri-state, ROM, RAM y matriz de LEDs.
-6. **Publicación:** GitHub Actions (build, tests, binarios por plataforma).
-
-Más adelante: tablas de verdad, mapas de Karnaugh y exportación a Verilog.
+6. **Herramientas educativas:** errores con sugerencia (desde la fase 1), tabla de verdad, verificación, solución desde tabla de verdad y equivalencia.
+7. **Publicación:** GitHub Actions (build, tests, binarios por plataforma).
+8. **Exportación e importación:** Verilog, exportar a LogicCircuit y luego importar desde LogicCircuit.
 
 ---
 
