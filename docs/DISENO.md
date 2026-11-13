@@ -25,20 +25,17 @@ Que un estudiante pueda:
 
 Sintaxis estilo C++ (llaves y `;`), pero con muy pocas reglas.
 
-### Compuertas: se declaran una vez y se usan infinitas veces
+### Compuertas: se usan directo
 
-Como arrastrar un componente desde la paleta en LogicCircuit: se configura un **molde** con `.set(entradas)` y se llama las veces que se quiera. Cada llamada es una compuerta nueva e independiente.
+Cada llamada es una compuerta nueva e independiente. El número de entradas sale de los argumentos.
 
 ```cpp
-A3 = and.set(3);        // molde: AND de 3 entradas
-N  = nor.set(2);        // molde: NOR de 2 entradas
-
 circuit Ejemplo {
     in A, B, C, D;
     out X, Y;
 
-    X = A3(A, B, C);    // compuerta 1
-    Y = A3(B, C, D);    // compuerta 2 (otra distinta)
+    X = and(A, B, C);   // AND de 3 entradas
+    Y = and(C, D);      // AND de 2 (otra compuerta distinta)
 }
 ```
 
@@ -49,9 +46,8 @@ circuit FlipFlop {
     in S, R;
     out Q, Qn;
 
-    N = nor.set(2);
-    Q  = N(R, Qn);      // realimentación: Q depende de Qn y viceversa
-    Qn = N(S, Q);
+    Q  = nor(R, Qn);    // realimentación: Q depende de Qn y viceversa
+    Qn = nor(S, Q);
 }
 ```
 
@@ -96,10 +92,10 @@ El `for` solo **construye** el circuito al compilar (no se ejecuta durante la si
 - **Por referencia:** si se modifica `FlipFlop.SA`, todos los circuitos que lo usan reflejan el cambio al recompilar.
 - **Se compila el circuito seleccionado**, no solo `main`. Al abrir `FlipFlop.SA` y presionar ▶ se simula ese circuito, y sus entradas aparecen como interruptores. Solo se compila ese circuito y sus dependencias, así que un error en otro archivo no bloquea la prueba.
 - Un archivo puede tener varios circuitos; el nombre del archivo no importa, cuenta el nombre del `circuit`.
-- Los moldes declarados fuera de un `circuit` se ven en **todo el proyecto**, igual que los circuitos.
+- Los moldes de memoria (`rom`, `ram`) declarados fuera de un `circuit` se ven en **todo el proyecto**, igual que los circuitos.
 - Distingue mayúsculas: `Q` y `q` son distintos.
 - `main` es opcional: es solo el circuito que se abre por defecto.
-- **Constantes:** `0` y `1` se pueden pasar donde va una señal, por ejemplo `FlipFlop(1, 0)` o `A3(A, B, 1)`.
+- **Constantes:** `0` y `1` se pueden pasar donde va una señal, por ejemplo `FlipFlop(1, 0)` o `and(A, B, 1)`.
 
 ```
 mi-proyecto/
@@ -114,7 +110,7 @@ mi-proyecto/
 
 Hay dos formas de escribirlos:
 
-1. **Compuertas y componentes internos:** molde `X = tipo.set(...);` y luego `X(...)`.
+1. **Compuertas y memorias:** las compuertas se llaman directo, `and(A, B)`. Las memorias se configuran con un molde `R = rom.size(...);` y luego `R(...)`.
 2. **Dispositivos de entrada/salida** (los que se ven o se tocan): `tipo nombre(...);`.
 
 ### Entradas
@@ -142,11 +138,11 @@ Si un circuito con `in`/`button` se usa dentro de otro, esas entradas se comport
 
 | Componente                     | Código                                          |
 |--------------------------------|-------------------------------------------------|
-| AND, OR, XOR, NAND, NOR, XNOR  | `A3 = and.set(3);`                              |
+| AND, OR, XOR, NAND, NOR, XNOR  | `and(A, B, C)` (2 o más entradas)               |
 | NOT, buffer                    | `not(X)`, `buffer(X)` (siempre 1 entrada)       |
-| Buffer tri-state               | `T = tristate.set(1);` → `T(dato, habilitar)`   |
-| ROM                            | `R = rom.set(4, 8, "datos.hex");` (dir, dato)   |
-| RAM                            | `M = ram.set(4, 8);` → `M(dir, dato, escribir, clk)` |
+| Buffer tri-state               | `tristate(dato, habilitar)`                     |
+| ROM                            | `R = rom.size(4, 8, "datos.hex");` → `R(dir)` (bits de dirección, bits de dato) |
+| RAM                            | `M = ram.size(4, 8);` → `M(dir, dato, escribir, clk)` |
 
 **Buses y splitters:** `in A[8];` declara un bus. `A[0]`, `A[0..3]` y `{a, b, c}` separan y unen bits. En el dibujo se ven como splitters.
 
@@ -173,7 +169,7 @@ circuit Demo {
 ```ebnf
 (* ---------- Archivo ---------- *)
 file        = { item } EOF ;
-item        = circuit | assign ;              (* assign afuera = molde global *)
+item        = circuit | assign ;              (* assign afuera = molde de memoria global *)
 
 circuit     = ( "circuit" IDENT | "main" ) "{" { stmt } "}" ;
 
@@ -184,11 +180,11 @@ stmt        = port_decl
             | for_stmt
             | assign ;
 
-port_decl   = ( "in" | "out" | "button" ) port { "," port } ";" ;
+port_decl   = ( "in" | "out" ) port { "," port } ";" ;
 port        = IDENT [ "[" INT "]" ] ;         (* A  o  A[8] = bus de 8 bits *)
 
-device_decl = DEVICE IDENT "(" [ args ] ")" ";" ;
-DEVICE      = "clock" | "led" | "display7" | "matrix" | "probe" ;
+device_decl = DEVICE IDENT [ "(" [ args ] ")" ] ";" ;   (* button B;  led L(Q); *)
+DEVICE      = "button" | "clock" | "led" | "display7" | "matrix" | "probe" ;
 
 inst_decl   = IDENT IDENT [ "[" iexpr "]" ] ";" ;   (* FullAdder fa[8]; *)
 
@@ -206,7 +202,9 @@ postfix     = primary { "." IDENT
                       | "(" [ args ] ")"
                       | index } ;
 
-primary     = IDENT | INT | STRING | "(" expr ")" ;
+primary     = IDENT | COMPONENT | INT | STRING | "(" expr ")" ;
+COMPONENT   = "and" | "or" | "xor" | "nand" | "nor" | "xnor"
+            | "not" | "buffer" | "tristate" | "rom" | "ram" ;
 index       = "[" iexpr [ ".." iexpr ] "]" ;  (* rango inclusivo *)
 iexpr       = iterm { ( "+" | "-" ) iterm } ;   (* índices: 3,  i,  i-1 *)
 iterm       = INT | IDENT ;
@@ -220,17 +218,22 @@ letter      = "A".."Z" | "a".."z" | "_" ;
 comment     = "//" { char } newline | "/*" { char } "*/" ;
 ```
 
-**Palabras reservadas (11):** `circuit`, `main`, `for`, `in`, `out`, `button`, `clock`, `led`, `display7`, `matrix`, `probe`.
+**Palabras reservadas (22):**
 
-`and`, `or`, `not`, `rom`, `ram`, etc. **no** son palabras reservadas: son nombres predefinidos. Agregar un componente nuevo no requiere tocar el parser.
+- Estructura: `circuit`, `main`, `for`, `in`, `out`
+- Compuertas: `and`, `or`, `xor`, `nand`, `nor`, `xnor`, `not`, `buffer`, `tristate`
+- Memorias: `rom`, `ram`
+- Dispositivos: `button`, `clock`, `led`, `display7`, `matrix`, `probe`
+
+Los componentes son reservados para que no se puedan tapar (`and = ...` es error de sintaxis). Agregar un componente nuevo implica sumarlo al lexer y a la gramática. `size` no es reservada: es un nombre que va después de `.`.
 
 ### Reglas semánticas
 
 1. **El orden no importa** dentro de un circuito: una señal se puede usar antes de definirse (necesario para la realimentación).
-2. **Asignar a un nombre nuevo lo crea:** molde (`N = nor.set(2);`), instancia (`ff = FlipFlop(S, R);`) o señal (`x = N(A, B);`).
+2. **Asignar a un nombre nuevo lo crea:** molde (`M = ram.size(4, 8);`), instancia (`ff = FlipFlop(S, R);`) o señal (`x = nor(A, B);`).
 3. **Un solo conductor por señal:** asignar dos veces la misma señal es error (excepto salidas tri-state en un bus).
-4. **Cantidades y anchos deben coincidir:** `A3(A, B)` es error (espera 3 entradas).
-5. **Resolución de nombres:** circuito actual → moldes y circuitos del proyecto (cualquier `.SA` de la carpeta raíz) → predefinidos.
+4. **Cantidades y anchos deben coincidir:** `not(A, B)` es error (espera 1 entrada), igual que `and(A)` (pide 2 o más).
+5. **Resolución de nombres:** circuito actual → moldes y circuitos del proyecto (cualquier `.SA` de la carpeta raíz). Los componentes son reservados, así que nunca chocan.
 6. Todo `out` debe estar asignado. Entradas sin usar generan advertencia.
 7. Una entrada de subcircuito sin conectar vale **X** y genera advertencia.
 8. El `for` se desenrolla al compilar; su variable solo existe en índices.
