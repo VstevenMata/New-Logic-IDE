@@ -2,11 +2,15 @@
 // Sin ventana de consola extra al abrirlo en Windows
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod ayuda;
 mod comandos;
 mod interfaz;
 
 use eframe::egui;
 use std::process::ExitCode;
+
+/// Logo de la app: ícono de la ventana y barra superior
+pub const LOGO: &[u8] = include_bytes!("../../../assets/logo.png");
 
 // logicsm (o logicsm open) abre la ventana; logicsm update | delete | help son comandos de terminal
 fn main() -> ExitCode {
@@ -30,7 +34,7 @@ fn ventana() -> eframe::Result {
             // Igual al nombre de logicsm.desktop: así Linux (Wayland) le pone el ícono correcto
             .with_app_id("logicsm")
             .with_icon(
-                eframe::icon_data::from_png_bytes(include_bytes!("../../../assets/logo.png"))
+                eframe::icon_data::from_png_bytes(LOGO)
                     .expect("assets/logo.png es un PNG válido"),
             )
             .with_inner_size([1280.0, 800.0])
@@ -42,7 +46,7 @@ fn ventana() -> eframe::Result {
         opciones,
         Box::new(|cc| {
             interfaz::estilo(&cc.egui_ctx);
-            Ok(Box::new(interfaz::Interfaz::nueva()))
+            Ok(Box::new(interfaz::Interfaz::nueva(&cc.egui_ctx)))
         }),
     )
 }
