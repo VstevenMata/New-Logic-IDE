@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Instalador de Logic_F-4:13 para Linux y macOS:
+# Instalador de LogicSM para Linux y macOS:
 #   curl -fsSL https://raw.githubusercontent.com/VstevenMata/New-Logic-IDE/main/instalar.sh | bash
 # Sin preguntas (instala, o actualiza si ya está instalado):
 #   curl -fsSL https://raw.githubusercontent.com/VstevenMata/New-Logic-IDE/main/instalar.sh | bash -s -- -y
+# LogicSM lleva este script adentro: "logicsm update" y "logicsm delete" lo usan.
 set -euo pipefail
 
 REPO=VstevenMata/New-Logic-IDE
-NOMBRE=Logic_F-4:13
-CMD=logicsa
-INSTALADOR=https://raw.githubusercontent.com/$REPO/main/instalar.sh
+NOMBRE=LogicSM
+CMD=logicsm
 
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
     B=$'\e[1m' T=$'\e[2m' R=$'\e[0m' ACENTO=$'\e[1;36m' VERDE=$'\e[32m' AMARILLO=$'\e[33m' ROJO=$'\e[31m'
@@ -26,31 +26,38 @@ Instalador de $NOMBRE
 
 uso: instalar.sh [opciones]
 
-  -y, --yes        instala sin preguntar (si ya está instalado, lo actualiza)
-      --dir RUTA   carpeta donde instalar (se crea $CMD/ adentro)
+  -y, --yes        sin preguntas (instala, o actualiza si ya está instalado)
+      --dir RUTA   carpeta donde guardar el ejecutable (por defecto ~/.local/bin)
+      --desinstalar  quita $NOMBRE del sistema; los proyectos no se borran
   -h, --help       muestra esta ayuda
 EOF
 }
 
-# Carpeta elegida → APP=<carpeta>/logicsa (absoluta, sin comillas que rompan el comando generado)
+# ~ y rutas relativas a absolutas, sin / final
 fijar_dir() {
     local d=${1/#\~/$HOME}
     case $d in /*) ;; *) d="$PWD/$d" ;; esac
-    case $d in *\'*) error "la ruta no puede tener comillas simples" ;; esac
-    APP="${d%/}/$CMD"
+    DIR=${d%/}
 }
 
-SI=0 DIR_DADO=0
-APP="$HOME/.local/share/$CMD"
+BIN="$HOME/.local/bin"
+SI=0 DESINSTALAR=0 DIR_DADO=0 DIR=$BIN
 while [ $# -gt 0 ]; do
     case $1 in
         -y | --yes) SI=1 ;;
         --dir) fijar_dir "${2:?falta la ruta después de --dir}"; DIR_DADO=1; shift ;;
+        --desinstalar) DESINSTALAR=1 ;;
         -h | --help) uso; exit 0 ;;
         *) error "opción desconocida: $1 (usa --help)" ;;
     esac
     shift
 done
+
+# NixOS no puede correr el ejecutable suelto (no tiene /lib64/ld-linux); el flake lo compila y lo envuelve
+if [ -e /etc/NIXOS ]; then
+    printf '\n  En NixOS, LogicSM se abre con nix:\n\n    %snix run github:%s%s\n\n' "$ACENTO" "$REPO" "$R"
+    exit 0
+fi
 
 case "$(uname -s)" in
     Linux) SO=linux ;;
@@ -62,38 +69,37 @@ case "$(uname -m)" in
     arm64 | aarch64) ARQ=aarch64 ;;
     *) error "arquitectura no soportada: $(uname -m)" ;;
 esac
-command -v curl >/dev/null || error "se necesita curl"
 
-BIN="$HOME/.local/bin"
-COMANDO="$BIN/$CMD"
+ENLACE="$BIN/$CMD"
 LINEA_PATH="export PATH=\"\$HOME/.local/bin:\$PATH\" # $CMD"
 FISH="$HOME/.config/fish/conf.d/$CMD.fish"
-# Carpetas de datos de la app: "logicsa delete" las borra. Los proyectos de los estudiantes NO deben guardarse aquí.
+# Carpetas de datos de la app: la desinstalación las borra. Los proyectos de los estudiantes NO deben guardarse aquí.
 if [ $SO = linux ]; then
     CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/$CMD"
     CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/$CMD"
     DATOS="${XDG_DATA_HOME:-$HOME/.local/share}/$CMD"
     DESKTOP="${XDG_DATA_HOME:-$HOME/.local/share}/applications/$CMD.desktop"
+    ICONO="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/512x512/apps/$CMD.png"
 else
     CONFIG="$HOME/Library/Application Support/$CMD"
     CACHE="$HOME/Library/Caches/$CMD"
-    DATOS="$HOME/.local/share/$CMD"
-    DESKTOP=""
+    DATOS="" DESKTOP="" ICONO=""
 fi
 
-# Si ya está instalado, se actualiza en la misma carpeta
-INSTALADO=0
-if [ -f "$COMANDO" ]; then
-    INSTALADO=1
-    previa=$(sed -n "s/^APP='\(.*\)'\$/\1/p" "$COMANDO")
-    if [ $DIR_DADO = 0 ] && [ -n "$previa" ]; then APP=$previa; fi
+# Instalación existente: ~/.local/bin/logicsm es el ejecutable, o un enlace a él si se eligió otra carpeta
+ACTUAL=""
+if [ -L "$ENLACE" ]; then ACTUAL=$(readlink "$ENLACE"); elif [ -f "$ENLACE" ]; then ACTUAL=$ENLACE; fi
+if [ -n "$ACTUAL" ] && [ $DIR_DADO = 0 ]; then DIR=${ACTUAL%/*}; fi
+
+# Versión del último release (sin release o sin internet queda vacía); desinstalar no la necesita
+VERSION=""
+if [ $DESINSTALAR = 0 ]; then
+    command -v curl >/dev/null || error "se necesita curl"
+    url=$(curl -fsSLI -o /dev/null -w '%{url_effective}' --connect-timeout 10 "https://github.com/$REPO/releases/latest" 2>/dev/null || true)
+    case $url in */tag/*) VERSION=${url##*/} ;; esac
 fi
 
-# Versión del último release (sin release o sin internet queda vacía)
-url=$(curl -fsSLI -o /dev/null -w '%{url_effective}' --connect-timeout 10 "https://github.com/$REPO/releases/latest" 2>/dev/null || true)
-case $url in */tag/*) VERSION=${url##*/} ;; *) VERSION="" ;; esac
-
-# Con curl | bash la entrada es el script: las teclas se leen de la terminal. Sin terminal, se instala sin preguntar.
+# Con curl | bash la entrada es el script: las teclas se leen de la terminal. Sin terminal, no se pregunta.
 INTERACTIVO=0 ESTADO="" TMP=""
 if [ $SI = 0 ] && [ -t 1 ] && { exec 3</dev/tty; } 2>/dev/null; then INTERACTIVO=1; fi
 salir() {
@@ -150,75 +156,8 @@ menu() {
 pedir_carpeta() {
     local nueva
     echo
-    read -e -r -p "  Carpeta donde instalar (se crea $CMD/ adentro): " nueva </dev/tty || nueva=""
+    read -e -r -p "  Carpeta donde guardar $NOMBRE (si no existe se crea): " nueva </dev/tty || nueva=""
     if [ -n "$nueva" ]; then fijar_dir "$nueva"; fi
-}
-
-# Comando logicsa: abre la app, la actualiza o la desinstala. Las rutas quedan fijas al instalar.
-escribir_comando() {
-    {
-        printf '#!/bin/sh\n# Comando %s: lo creó el instalador de %s y "%s delete" lo borra\n' "$CMD" "$NOMBRE" "$CMD"
-        printf "NOMBRE='%s'\nAPP='%s'\nCOMANDO='%s'\nDESKTOP='%s'\nFISH='%s'\n" "$NOMBRE" "$APP" "$COMANDO" "$DESKTOP" "$FISH"
-        printf "CONFIG='%s'\nCACHE='%s'\nDATOS='%s'\n" "$CONFIG" "$CACHE" "$DATOS"
-        printf "LINEA_PATH='%s'\nINSTALADOR='%s'\n" "$LINEA_PATH" "$INSTALADOR"
-        cat <<'EOF'
-
-uso() {
-    cat <<FIN
-Uso: logicsa [comando]
-
-  open      abre $NOMBRE (es lo que hace logicsa sin comando)
-  update    actualiza a la última versión
-  delete    desinstala $NOMBRE por completo; tus proyectos no se borran
-  help      muestra esta ayuda
-FIN
-}
-
-case "${1:-open}" in
-    open)
-        if [ $# -gt 0 ]; then shift; fi
-        if [ ! -x "$APP/logicsa" ]; then
-            echo "error: no se encontró $APP/logicsa. Reinstálalo con: logicsa update" >&2
-            exit 1
-        fi
-        nohup "$APP/logicsa" "$@" >/dev/null 2>&1 &
-        echo "Abriendo $NOMBRE…"
-        ;;
-    update)
-        curl -fsSL "$INSTALADOR" | bash -s -- -y
-        ;;
-    delete | uninstall)
-        if [ "${2:-}" != -y ]; then
-            printf '¿Desinstalar %s? Tus proyectos no se borran. [s/N] ' "$NOMBRE"
-            read -r r || r=""
-            case $r in s | S | si | Si | sí | Sí | y | Y) ;; *) echo "No se desinstaló nada."; exit 0 ;; esac
-        fi
-        # Solo se borra lo que creó el instalador: la carpeta elegida pudo tener otras cosas
-        rm -f "$APP/logicsa"
-        rmdir "$APP" 2>/dev/null
-        rm -rf "$CONFIG" "$CACHE" "$DATOS"
-        rm -f "$DESKTOP" "$FISH"
-        for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
-            if [ -f "$rc" ] && grep -qxF "$LINEA_PATH" "$rc"; then
-                grep -vxF "$LINEA_PATH" "$rc" >"$rc.logicsa"
-                cat "$rc.logicsa" >"$rc"
-                rm -f "$rc.logicsa"
-            fi
-        done
-        rm -f "$COMANDO"
-        echo "✔ $NOMBRE se desinstaló. Tus proyectos siguen donde los guardaste."
-        ;;
-    help | -h | --help) uso ;;
-    *)
-        echo "logicsa: comando desconocido: $1" >&2
-        uso >&2
-        exit 1
-        ;;
-esac
-EOF
-    } >"$COMANDO.tmp"
-    chmod +x "$COMANDO.tmp"
-    mv -f "$COMANDO.tmp" "$COMANDO"
 }
 
 # ~/.local/bin ya está en el PATH en la mayoría de sistemas; si no, se agrega para bash, zsh y fish
@@ -241,11 +180,11 @@ agregar_path() {
 }
 
 instalar() {
-    local archivo="$CMD-$SO-$ARQ"
+    local archivo="$CMD-$SO-$ARQ" destino="$DIR/$CMD"
     echo
     [ -n "$VERSION" ] || error "no hay ningún release publicado todavía, o no hay conexión a internet"
-    if ! mkdir -p "$APP" "$BIN" 2>/dev/null || [ ! -w "$APP" ]; then error "no se puede escribir en $(corto "$APP")"; fi
-    TMP="$APP/$CMD.tmp"
+    if ! mkdir -p "$DIR" "$BIN" 2>/dev/null || [ ! -w "$DIR" ]; then error "no se puede escribir en $(corto "$DIR")"; fi
+    TMP="$destino.tmp"
     if [ -t 2 ]; then
         curl -fL --progress-bar --connect-timeout 10 -o "$TMP" "https://github.com/$REPO/releases/download/$VERSION/$archivo" ||
             error "no se pudo descargar $archivo (puede que no exista para $SO $ARQ)"
@@ -255,23 +194,32 @@ instalar() {
             error "no se pudo descargar $archivo (puede que no exista para $SO $ARQ)"
     fi
     chmod +x "$TMP"
-    mv -f "$TMP" "$APP/$CMD"
+    mv -f "$TMP" "$destino"
     TMP=""
     ok "Descargado $NOMBRE $VERSION ($SO $ARQ)"
 
-    escribir_comando
-    ok "Comando $CMD listo"
+    # Si antes estaba en otra carpeta, se quita la copia vieja
+    if [ -n "$ACTUAL" ] && [ "$ACTUAL" != "$destino" ]; then rm -f "$ACTUAL"; fi
+    # En otra carpeta, el comando logicsm apunta ahí desde ~/.local/bin (como en GGEZ)
+    if [ "$destino" != "$ENLACE" ]; then
+        ln -sf "$destino" "$ENLACE"
+        ok "Comando $CMD → $(corto "$destino")"
+    fi
     NUEVA_TERMINAL=0
     agregar_path
 
     if [ -n "$DESKTOP" ]; then
-        mkdir -p "${DESKTOP%/*}"
+        # El ícono es opcional: si no se puede bajar, el acceso queda con el ícono genérico
+        mkdir -p "${ICONO%/*}" "${DESKTOP%/*}"
+        curl -fsL --connect-timeout 10 -o "$ICONO" "https://raw.githubusercontent.com/$REPO/$VERSION/assets/logo.png" || true
         cat >"$DESKTOP" <<EOF
 [Desktop Entry]
 Type=Application
 Name=$NOMBRE
 Comment=Diseña, visualiza y simula circuitos digitales
-Exec="$APP/$CMD"
+Exec="$destino"
+Icon=$ICONO
+StartupWMClass=$CMD
 Terminal=false
 Categories=Development;Education;Electronics;
 EOF
@@ -280,8 +228,7 @@ EOF
 
     printf '\n  %s%s se instaló correctamente.%s\n\n' "$VERDE$B" "$NOMBRE" "$R"
     printf '    %sVersión%s     %s\n' "$T" "$R" "$VERSION"
-    printf '    %sUbicación%s   %s\n' "$T" "$R" "$(corto "$APP")"
-    printf '    %sComando%s     %s\n\n' "$T" "$R" "$(corto "$COMANDO")"
+    printf '    %sUbicación%s   %s\n\n' "$T" "$R" "$(corto "$destino")"
     printf '  Para empezar:\n'
     printf '    %s%-16s%s abre la app\n' "$ACENTO" "$CMD" "$R"
     printf '    %s%-16s%s actualiza a la última versión\n' "$ACENTO" "$CMD update" "$R"
@@ -290,30 +237,44 @@ EOF
     echo
 }
 
+# Solo se borra lo que creó el instalador: si el ejecutable estaba en otra carpeta, esa carpeta se queda
+desinstalar() {
+    local rc
+    echo
+    rm -f "$ACTUAL" "$ENLACE" "$DESKTOP" "$ICONO" "$FISH"
+    rm -rf "$CONFIG" "$CACHE" "$DATOS"
+    for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+        if [ -f "$rc" ] && grep -qxF "$LINEA_PATH" "$rc"; then
+            grep -vxF "$LINEA_PATH" "$rc" >"$rc.$CMD" || true
+            cat "$rc.$CMD" >"$rc"
+            rm -f "$rc.$CMD"
+        fi
+    done
+    ok "$NOMBRE se desinstaló. Tus proyectos siguen donde los guardaste."
+    echo
+}
+
 cancelar() { printf '\n  No se hizo ningún cambio.\n\n'; }
 
 printf '\n  %s✻ %s%s\n' "$ACENTO" "$NOMBRE" "$R"
 printf '  %sInstalador · %s %s%s%s\n' "$T" "$SO" "$ARQ" "${VERSION:+ · $VERSION}" "$R"
 
-if [ $INSTALADO = 1 ]; then
+if [ $DESINSTALAR = 1 ]; then
+    if [ -z "$ACTUAL" ]; then printf '\n'; aviso "$NOMBRE no está instalado."; echo; exit 0; fi
+    ELEGIDA=1
+    if [ $INTERACTIVO = 1 ]; then menu "¿Desinstalar $NOMBRE? Tus proyectos no se borran." "Cancelar" "Desinstalar"; fi
+    case $ELEGIDA in 1) desinstalar ;; *) cancelar ;; esac
+elif [ -n "$ACTUAL" ]; then
     ELEGIDA=0
     if [ $INTERACTIVO = 1 ]; then
         menu "$NOMBRE ya está instalado. ¿Qué quieres hacer?" "Actualizar a la última versión" "Desinstalar" "Cancelar"
     fi
-    case $ELEGIDA in
-        0) instalar ;;
-        1) echo; sh "$COMANDO" delete -y; echo ;;
-        *) cancelar ;;
-    esac
+    case $ELEGIDA in 0) instalar ;; 1) desinstalar ;; *) cancelar ;; esac
 else
     if [ -z "$VERSION" ]; then echo; error "no hay ningún release publicado todavía, o no hay conexión a internet"; fi
     ELEGIDA=0
     if [ $INTERACTIVO = 1 ]; then
-        menu "¿Cómo quieres instalarlo?" "Instalar en $(corto "$APP") (recomendado)" "Elegir otra carpeta" "Cancelar"
+        menu "¿Cómo quieres instalarlo?" "Instalar en $(corto "$DIR") (recomendado)" "Elegir otra carpeta" "Cancelar"
     fi
-    case $ELEGIDA in
-        0) instalar ;;
-        1) pedir_carpeta; instalar ;;
-        *) cancelar ;;
-    esac
+    case $ELEGIDA in 0) instalar ;; 1) pedir_carpeta; instalar ;; *) cancelar ;; esac
 fi

@@ -1,0 +1,11 @@
+[package]
+name = "logicsm-cli"
+description = "Prueba las compuertas predefinidas de LogicSM desde la terminal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+logicsm-core.workspace = true
+logicsm-sim.workspace = true

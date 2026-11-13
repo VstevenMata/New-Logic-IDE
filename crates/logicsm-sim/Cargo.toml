@@ -1,0 +1,10 @@
+[package]
+name = "logicsm-sim"
+description = "Simulador por eventos de circuitos digitales de LogicSM"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+logicsm-core.workspace = true

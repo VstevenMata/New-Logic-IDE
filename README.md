@@ -344,12 +344,14 @@ código .SA → Lexer → Parser → AST → Análisis semántico → Elaboraci�
 New-Logic-IDE/
 ├── Cargo.toml              # workspace
 ├── crates/
-│   ├── logicf4-core/       # lexer, parser, AST, semántica, elaboración → IR
-│   ├── logicf4-sim/        # motor de simulación
-│   └── logicf4-cli/        # logicf4 check | sim | table archivo.SA
+│   ├── logicsm-core/       # lexer, parser, AST, semántica, elaboración → IR
+│   ├── logicsm-sim/        # motor de simulación
+│   └── logicsm-cli/        # herramienta de desarrollo: logicsm-cli and 3 → tabla de verdad
 └── apps/
-    └── desktop/            # eframe: editor, lienzo, paneles
+    └── desktop/            # LogicSM (binario logicsm): editor, lienzo, paneles
 ```
+
+`logicsm-cli` solo prueba las compuertas predefinidas (`and`, `nor`, `xor`… con n entradas) y no tiene lógica propia: llama a `logicsm-core` y `logicsm-sim`. No se incluye en el release.
 
 Dependencias del desktop: `eframe`, `egui_dock` (paneles tipo IDE), `rfd` (diálogos de archivo), `serde`.
 
@@ -361,7 +363,7 @@ El editor de código usa el **lexer real** del compilador para el resaltado de s
 
 **MVP terminado cuando:** se escribe el FullAdder en el editor, se ve dibujado, se activan sus entradas, la tabla de verdad es correcta, y los tests del parser y del simulador pasan en GitHub Actions.
 
-1. **Núcleo:** lexer, parser, semántica, IR y simulador, probados desde la CLI con tests.
+1. **Núcleo:** lexer, parser, semántica, IR y simulador, probados con `cargo test` y con las compuertas predefinidas desde `logicsm-cli`.
 2. **App mínima:** editor, circuito dibujado automáticamente, interruptores, constantes, compuertas, `out` y LED.
 3. **Secuenciales:** pulsador, reloj y realimentación (flip-flops con compuertas).
 4. **Visualización:** display 7 segmentos y sonda.

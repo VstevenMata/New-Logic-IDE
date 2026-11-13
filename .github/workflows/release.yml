@@ -1,0 +1,51 @@
+# Al subir un tag v* (git tag v0.1.0 && git push origin v0.1.0) compila LogicSM para cada
+# sistema y publica el release con los nombres que descargan instalar.sh e instalar.ps1
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  compilar:
+    strategy:
+      matrix:
+        include:
+          # Ubuntu 22.04 para que el binario corra también en distros con glibc más vieja
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, archivo: logicsm-linux-x86_64 }
+          - { os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu, archivo: logicsm-linux-aarch64 }
+          - { os: macos-latest, target: x86_64-apple-darwin, archivo: logicsm-macos-x86_64 }
+          - { os: macos-latest, target: aarch64-apple-darwin, archivo: logicsm-macos-aarch64 }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, archivo: logicsm-windows-x86_64.exe }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - run: cargo build --release --locked -p logicsm --target ${{ matrix.target }}
+      - name: Renombrar
+        shell: bash
+        run: |
+          origen=target/${{ matrix.target }}/release/logicsm
+          if [ -f "$origen.exe" ]; then origen="$origen.exe"; fi
+          cp "$origen" ${{ matrix.archivo }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.archivo }}
+          path: ${{ matrix.archivo }}
+
+  publicar:
+    needs: compilar
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "LogicSM $GITHUB_REF_NAME" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
