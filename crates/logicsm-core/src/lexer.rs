@@ -6,7 +6,7 @@
 use crate::Error;
 use std::ops::Range;
 
-/// Las 22 palabras reservadas del lenguaje.
+/// Las 23 palabras reservadas del lenguaje.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reservada {
     // Estructura
@@ -25,6 +25,8 @@ pub enum Reservada {
     Not,
     Buffer,
     Tristate,
+    // Buses
+    Split,
     // Memorias
     Rom,
     Ram,
@@ -55,6 +57,7 @@ impl Reservada {
             "not" => Not,
             "buffer" => Buffer,
             "tristate" => Tristate,
+            "split" => Split,
             "rom" => Rom,
             "ram" => Ram,
             "button" => Button,

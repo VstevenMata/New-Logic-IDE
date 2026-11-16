@@ -113,4 +113,32 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn sumador_de_4_bits_con_arreglo_y_for() {
+        let red = logicsm_core::compilar(
+            "circuit FullAdder { in A, B, Cin; out Sum, Cout;
+                 Sum = xor(A, B, Cin); Cout = or(and(A, B), and(Cin, xor(A, B))); }
+             circuit Adder4 {
+                 in A[4], B[4], Cin; out S[4], Cout;
+                 FullAdder fa[4];
+                 for (i = 0; i < 4; i++) { fa[i].A = A[i]; fa[i].B = B[i]; S[i] = fa[i].Sum; }
+                 fa[0].Cin = Cin;
+                 for (i = 1; i < 4; i++) { fa[i].Cin = fa[i-1].Cout; }
+                 Cout = fa[3].Cout;
+             }",
+        )
+        .unwrap();
+        let bits = |n: u32| (0..4).map(move |k| (n >> k) & 1 == 1);
+        let mut v = Vec::new();
+        for (a, b, c) in [(5, 6, 0), (15, 1, 0), (9, 9, 1), (0, 0, 0)] {
+            // Entradas en orden: A[0..3], B[0..3], Cin
+            let e: Vec<bool> = bits(a).chain(bits(b)).chain([c == 1]).collect();
+            assert!(simular(&red, &mut v, &e));
+            let total = a + b + c;
+            // Salidas en orden: S[0..3], Cout
+            let esperado: Vec<bool> = bits(total).chain([total >= 16]).collect();
+            assert_eq!(salidas(&red, &v), esperado, "{a} + {b} + {c}");
+        }
+    }
 }

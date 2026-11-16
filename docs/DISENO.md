@@ -141,10 +141,11 @@ Si un circuito con `in`/`button` se usa dentro de otro, esas entradas se comport
 | AND, OR, XOR, NAND, NOR, XNOR  | `and(A, B, C)` (2 o más entradas)               |
 | NOT, buffer                    | `not(X)`, `buffer(X)` (siempre 1 entrada)       |
 | Buffer tri-state               | `tristate(dato, habilitar)`                     |
+| Splitter                       | `a = split.derecha(A);` separa (`a[0]`, `a[1]`, ...), `B = split.izquierda(x, y, z);` junta |
 | ROM                            | `R = rom.size(4, 8, "datos.hex");` → `R(dir)` (bits de dirección, bits de dato) |
 | RAM                            | `M = ram.size(4, 8);` → `M(dir, dato, escribir, clk)` |
 
-**Buses y splitters:** `in A[8];` declara un bus. `A[0]`, `A[0..3]` y `{a, b, c}` separan y unen bits. En el dibujo se ven como splitters.
+**Buses y splitters:** `in A[8];` declara un bus. `A[0]` y `A[0..3]` eligen bits. El **splitter** es un componente, como las compuertas: el lado dice hacia dónde van los pines sueltos. `a = split.derecha(A);` separa un bus (los pines salen por la derecha y se usan con `a[0]`, `a[1]`, ...) y `B = split.izquierda(x, y, z);` junta pines en un bus (entran por la izquierda). El primer pin es el bit 0, como en LogicCircuit. Las compuertas con buses trabajan bit a bit y un bit suelto se repite: `and(D, E)` con `D[8]` da 8 AND. El ancho de una señal interna sale de lo que se le asigna. En el dibujo, `split` es una barra con el bus en un solo pin y los bits numerados del otro lado.
 
 ### Ejemplo
 
@@ -195,16 +196,15 @@ assign      = target "=" expr ";" ;
 target      = IDENT { index | "." IDENT } ;     (* Q,  S[3],  fa[i].Cin *)
 
 (* ---------- Expresiones ---------- *)
-expr        = postfix | concat ;
-concat      = "{" expr { "," expr } "}" ;
+expr        = postfix ;
 
 postfix     = primary { "." IDENT
                       | "(" [ args ] ")"
                       | index } ;
 
-primary     = IDENT | COMPONENT | INT | STRING | "(" expr ")" ;
+primary     = IDENT | COMPONENT | "split" "." IDENT | INT | STRING | "(" expr ")" ;
 COMPONENT   = "and" | "or" | "xor" | "nand" | "nor" | "xnor"
-            | "not" | "buffer" | "tristate" | "rom" | "ram" ;
+            | "not" | "buffer" | "tristate" | "split" | "rom" | "ram" ;
 index       = "[" iexpr [ ".." iexpr ] "]" ;  (* rango inclusivo *)
 iexpr       = iterm { ( "+" | "-" ) iterm } ;   (* índices: 3,  i,  i-1 *)
 iterm       = INT | IDENT ;
@@ -218,10 +218,11 @@ letter      = "A".."Z" | "a".."z" | "_" ;
 comment     = "//" { char } newline | "/*" { char } "*/" ;
 ```
 
-**Palabras reservadas (22):**
+**Palabras reservadas (23):**
 
 - Estructura: `circuit`, `main`, `for`, `in`, `out`
 - Compuertas: `and`, `or`, `xor`, `nand`, `nor`, `xnor`, `not`, `buffer`, `tristate`
+- Buses: `split`
 - Memorias: `rom`, `ram`
 - Dispositivos: `button`, `clock`, `led`, `display7`, `matrix`, `probe`
 

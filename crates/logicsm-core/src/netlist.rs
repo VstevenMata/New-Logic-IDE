@@ -1,11 +1,14 @@
 //! Elaboración: AST → netlist (nodos conectados, sin nombres por resolver).
 //!
 //! Los circuitos propios se aplanan: cada instancia copia las compuertas de su
-//! circuito en un ámbito de nombres propio.
+//! circuito en un ámbito de nombres propio. Los buses se separan en bits con
+//! nombre (`A[0]`, `A[1]`, ...) y los `for` se desenrollan, así la red solo tiene
+//! señales de un bit.
 
-use crate::parser::{Circuito, Expr, Nombre};
+use crate::parser::{Acceso, Circuito, Expr, IExpr, Indice, Nombre, Puerto, Sentencia, Termino};
 use crate::{Compuerta, Error};
 use std::collections::HashMap;
+use std::ops::Range;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Tipo {
@@ -32,10 +35,20 @@ pub struct Nodo {
 pub struct Instancia {
     pub nombre: String,
     pub circuito: String,
-    /// Cada entrada con el nodo que la alimenta
+    /// Cada entrada (un pin por bit) con el nodo que la alimenta
     pub entradas: Vec<(String, usize)>,
-    /// Cada salida con el nodo que la da
+    /// Cada salida (un pin por bit) con el nodo que la da
     pub salidas: Vec<(String, usize)>,
+    /// Si es un `split`: de qué lado está el bus
+    pub split: Option<Split>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Split {
+    /// `split(A)`: entra un bus, sale un pin por bit
+    Separa,
+    /// `split(a, b, c)`: entra un pin por bit, sale un bus
+    Junta,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,23 +58,33 @@ pub struct Netlist {
     pub instancias: Vec<Instancia>,
 }
 
-/// De dónde sale una señal mientras se elabora. Los nombres se resuelven al
+/// De dónde sale un bit mientras se elabora. Los nombres se resuelven al
 /// final, así el orden no importa y la realimentación funciona.
-#[derive(Clone, Copy)]
-enum Ref<'a> {
+#[derive(Debug, Clone)]
+enum Ref {
     Nodo(usize),
-    /// Un nombre dentro de un ámbito
-    Senal(usize, &'a Nombre),
-    /// `m.Suma` dentro de un ámbito
-    Miembro(usize, &'a Nombre, &'a Nombre),
+    /// Un bit con nombre (`A`, `A[3]`, `fa[2].Cin`) dentro de un ámbito
+    Senal(usize, String, Range<usize>),
+    /// Un bit de una salida de una instancia: ámbito, instancia (`m`, `fa[2]`) y bit (`Suma`, `S[0]`)
+    Miembro(usize, String, String, Range<usize>),
 }
+
+/// Valores de las variables de los `for` que encierran una sentencia
+type Variables<'a> = Vec<(&'a str, i64)>;
 
 /// Los nombres de una copia de un circuito (el principal o una instancia)
 struct Ambito<'a> {
     circuito: &'a Circuito,
-    senales: HashMap<&'a str, Ref<'a>>,
-    /// Nombre de la instancia → su ámbito
-    instancias: HashMap<&'a str, usize>,
+    /// Cada bit con nombre → de dónde sale
+    senales: HashMap<String, Ref>,
+    /// Ancho de cada señal: `None` = un bit, `Some(n)` = bus de n bits
+    anchos: HashMap<String, Option<usize>>,
+    /// Instancia (`m`, `fa[2]`) → su circuito, conocido antes de copiarla
+    tipos: HashMap<String, &'a Circuito>,
+    /// Arreglo de instancias (`fa`) → cantidad
+    arreglos: HashMap<String, usize>,
+    /// Instancia ya copiada → su ámbito
+    instancias: HashMap<String, usize>,
 }
 
 struct Elaborador<'a> {
@@ -69,20 +92,143 @@ struct Elaborador<'a> {
     ambitos: Vec<Ambito<'a>>,
     nodos: Vec<Nodo>,
     /// Paralelo a `nodos`: de dónde sale cada una de sus entradas
-    pendientes: Vec<Vec<Ref<'a>>>,
+    pendientes: Vec<Vec<Ref>>,
     errores: Vec<Error>,
     /// Circuitos que se están copiando, para detectar uno que se contiene a sí mismo
     pila: Vec<&'a str>,
     /// Instancia del principal que se está copiando
     actual: Option<usize>,
-    /// Instancias del principal: nombre, circuito y sus entradas y salidas sin resolver
-    instancias: Vec<(&'a Nombre, &'a Circuito, Vec<Ref<'a>>)>,
+    /// Cajas del principal (instancias y `split`), con sus pines sin resolver
+    instancias: Vec<Caja>,
 }
 
-fn error(mensaje: String, n: &Nombre) -> Error {
-    Error {
-        mensaje,
-        rango: n.rango.clone(),
+struct Caja {
+    nombre: String,
+    circuito: String,
+    entradas: Vec<(String, Ref)>,
+    salidas: Vec<(String, Ref)>,
+    split: Option<Split>,
+}
+
+/// Más vueltas de `for` o copias en un arreglo seguramente es un error de tipeo
+const MAXIMO: i64 = 1024;
+
+fn error(mensaje: String, rango: Range<usize>) -> Error {
+    Error { mensaje, rango }
+}
+
+/// "1 bit", "8 bits"
+fn en_bits(n: usize) -> String {
+    if n == 1 {
+        "1 bit".into()
+    } else {
+        format!("{n} bits")
+    }
+}
+
+/// Nombres de los bits de una señal: `A`, o `A[0]`, `A[1]`, ... si es un bus.
+fn bits(base: &str, ancho: Option<usize>) -> Vec<String> {
+    match ancho {
+        None => vec![base.to_string()],
+        Some(n) => (0..n).map(|k| format!("{base}[{k}]")).collect(),
+    }
+}
+
+/// Los bits de todos los puertos, en orden (como se pasan a una instancia)
+fn bits_de(puertos: &[Puerto]) -> Vec<String> {
+    puertos
+        .iter()
+        .flat_map(|p| bits(&p.nombre.texto, p.ancho))
+        .collect()
+}
+
+fn puerto<'c>(puertos: &'c [Puerto], nombre: &str) -> Option<&'c Puerto> {
+    puertos.iter().find(|p| p.nombre.texto == nombre)
+}
+
+fn evaluar(e: &IExpr, vars: &Variables) -> Result<i64, Error> {
+    let mut total: i64 = 0;
+    for (positivo, t) in &e.terminos {
+        let v = match t {
+            Termino::Numero(n) => i64::try_from(*n).unwrap_or(i64::MAX),
+            Termino::Variable(n) => match vars.iter().rev().find(|(v, _)| *v == n.texto) {
+                Some(&(_, v)) => v,
+                None => {
+                    return Err(error(
+                        format!(
+                            "`{}` no es una variable de `for`: en los índices solo van números y la variable del `for`",
+                            n.texto
+                        ),
+                        n.rango.clone(),
+                    ));
+                }
+            },
+        };
+        total = if *positivo {
+            total.saturating_add(v)
+        } else {
+            total.saturating_sub(v)
+        };
+    }
+    Ok(total)
+}
+
+/// Los bits que elige un índice (`A`, `A[3]`, `A[0..3]`), del más bajo al más alto.
+fn elegir(
+    base: &str,
+    ancho: Option<usize>,
+    indice: Option<&Indice>,
+    vars: &Variables,
+) -> Result<Vec<String>, Error> {
+    let Some(ix) = indice else {
+        return Ok(bits(base, ancho));
+    };
+    let Some(n) = ancho else {
+        return Err(error(
+            format!("`{base}` es de un bit: no lleva índice"),
+            ix.rango.clone(),
+        ));
+    };
+    let desde = evaluar(&ix.desde, vars)?;
+    let hasta = match &ix.hasta {
+        Some(h) => evaluar(h, vars)?,
+        None => desde,
+    };
+    for k in [desde, hasta] {
+        if !(0..n as i64).contains(&k) {
+            return Err(error(
+                format!(
+                    "`{base}` tiene {}: el índice {k} no existe (van de 0 a {})",
+                    en_bits(n),
+                    n - 1
+                ),
+                ix.rango.clone(),
+            ));
+        }
+    }
+    let posiciones: Vec<i64> = if desde <= hasta {
+        (desde..=hasta).collect()
+    } else {
+        (hasta..=desde).rev().collect()
+    };
+    Ok(posiciones
+        .into_iter()
+        .map(|k| format!("{base}[{k}]"))
+        .collect())
+}
+
+/// Algún nombre dentro de la expresión, para ubicar un error
+fn rango_de(e: &Expr) -> Range<usize> {
+    match e {
+        Expr::Senal(a) => a.nombre.rango.clone(),
+        Expr::Instancia(n, _) => n.rango.clone(),
+        Expr::Split(_, _, rango) => rango.clone(),
+        Expr::Compuerta(_, partes) => partes
+            .iter()
+            .map(rango_de)
+            .find(|r| !r.is_empty())
+            .unwrap_or(0..0),
+        Expr::Constante(_) => 0..0,
     }
 }
 
@@ -100,17 +246,20 @@ pub fn elaborar(principal: &Circuito, circuitos: &[Circuito]) -> Result<Netlist,
     };
     for c in circuitos {
         if e.circuitos.insert(&c.nombre.texto, c).is_some() {
-            e.error(
+            e.agregar(error(
                 format!("el circuito `{}` está definido dos veces", c.nombre.texto),
-                &c.nombre,
-            );
+                c.nombre.rango.clone(),
+            ));
         }
     }
 
     let raiz = e.ambito(principal, None);
-    for n in &principal.salidas {
-        if e.ambitos[raiz].senales.contains_key(n.texto.as_str()) {
-            e.nodo(Tipo::Salida(n.texto.clone()), vec![Ref::Senal(raiz, n)]);
+    for p in &principal.salidas {
+        for b in bits(&p.nombre.texto, p.ancho) {
+            if e.ambitos[raiz].senales.contains_key(&b) {
+                let r = Ref::Senal(raiz, b.clone(), p.nombre.rango.clone());
+                e.nodo(Tipo::Salida(b), vec![r]);
+            }
         }
     }
 
@@ -126,26 +275,26 @@ pub fn elaborar(principal: &Circuito, circuitos: &[Circuito]) -> Result<Netlist,
     }
 
     let mut instancias = Vec::new();
-    for (nombre, c, fuentes) in std::mem::take(&mut e.instancias) {
+    for caja in std::mem::take(&mut e.instancias) {
         let mut entradas = Vec::new();
-        for (n, f) in c.entradas.iter().zip(fuentes) {
+        for (pin, f) in caja.entradas {
             match e.resolver(f) {
-                Ok(id) => entradas.push((n.texto.clone(), id)),
+                Ok(id) => entradas.push((pin, id)),
                 Err(err) => e.agregar(err),
             }
         }
         // Una salida sin valor ya tiene su error ("nunca recibe un valor")
-        let hijo = e.ambitos[raiz].instancias[nombre.texto.as_str()];
-        let salidas = c
+        let salidas = caja
             .salidas
-            .iter()
-            .filter_map(|s| Some((s.texto.clone(), e.resolver(Ref::Senal(hijo, s)).ok()?)))
+            .into_iter()
+            .filter_map(|(pin, f)| Some((pin, e.resolver(f).ok()?)))
             .collect();
         instancias.push(Instancia {
-            nombre: nombre.texto.clone(),
-            circuito: c.nombre.texto.clone(),
+            nombre: caja.nombre,
+            circuito: caja.circuito,
             entradas,
             salidas,
+            split: caja.split,
         });
     }
 
@@ -161,18 +310,14 @@ pub fn elaborar(principal: &Circuito, circuitos: &[Circuito]) -> Result<Netlist,
 }
 
 impl<'a> Elaborador<'a> {
-    /// Un circuito usado varias veces repetiría sus errores: se guardan una sola vez.
+    /// Un circuito usado varias veces (o un `for`) repetiría sus errores: se guardan una sola vez.
     fn agregar(&mut self, err: Error) {
         if !self.errores.contains(&err) {
             self.errores.push(err);
         }
     }
 
-    fn error(&mut self, mensaje: String, n: &Nombre) {
-        self.agregar(error(mensaje, n));
-    }
-
-    fn nodo(&mut self, tipo: Tipo, fuentes: Vec<Ref<'a>>) -> usize {
+    fn nodo(&mut self, tipo: Tipo, fuentes: Vec<Ref>) -> usize {
         let nombre = match &tipo {
             Tipo::Entrada(n) | Tipo::Salida(n) => n.clone(),
             _ => String::new(),
@@ -187,148 +332,673 @@ impl<'a> Elaborador<'a> {
         self.nodos.len() - 1
     }
 
-    /// Crea una copia de `c`. `entradas` son las señales que le llegan; `None` es
+    /// El circuito `n` del proyecto, si existe y no se está copiando ya.
+    fn circuito(&mut self, n: &Nombre) -> Option<&'a Circuito> {
+        let Some(&c) = self.circuitos.get(n.texto.as_str()) else {
+            self.agregar(error(
+                format!("`{}` no es un circuito del proyecto", n.texto),
+                n.rango.clone(),
+            ));
+            return None;
+        };
+        if self.pila.contains(&c.nombre.texto.as_str()) {
+            self.agregar(error(
+                format!("`{}` se usa dentro de sí mismo", n.texto),
+                n.rango.clone(),
+            ));
+            return None;
+        }
+        Some(c)
+    }
+
+    /// Crea una copia de `c`. `entradas` son los bits que le llegan; `None` es
     /// el circuito principal, cuyas entradas son interruptores.
-    fn ambito(&mut self, c: &'a Circuito, entradas: Option<Vec<Ref<'a>>>) -> usize {
+    fn ambito(&mut self, c: &'a Circuito, entradas: Option<Vec<Ref>>) -> usize {
         let id = self.ambitos.len();
         self.ambitos.push(Ambito {
             circuito: c,
             senales: HashMap::new(),
+            anchos: HashMap::new(),
+            tipos: HashMap::new(),
+            arreglos: HashMap::new(),
             instancias: HashMap::new(),
         });
         self.pila.push(&c.nombre.texto);
 
-        for (k, n) in c.entradas.iter().enumerate() {
-            if self.ambitos[id].senales.contains_key(n.texto.as_str()) {
-                self.error(format!("`{}` está declarada dos veces", n.texto), n);
+        let mut k = 0;
+        for p in &c.entradas {
+            let n = &p.nombre.texto;
+            let bs = bits(n, p.ancho);
+            if self.ambitos[id].anchos.contains_key(n) {
+                k += bs.len();
+                self.agregar(error(
+                    format!("`{n}` está declarada dos veces"),
+                    p.nombre.rango.clone(),
+                ));
                 continue;
             }
-            let r = match &entradas {
-                Some(refs) => refs[k],
-                None => Ref::Nodo(self.nodo(Tipo::Entrada(n.texto.clone()), Vec::new())),
-            };
-            self.ambitos[id].senales.insert(&n.texto, r);
+            for b in bs {
+                let r = match &entradas {
+                    Some(refs) => refs[k].clone(),
+                    None => Ref::Nodo(self.nodo(Tipo::Entrada(b.clone()), Vec::new())),
+                };
+                k += 1;
+                self.ambitos[id].senales.insert(b, r);
+            }
+            self.ambitos[id].anchos.insert(n.clone(), p.ancho);
+        }
+        for p in &c.salidas {
+            let n = &p.nombre.texto;
+            if self.ambitos[id].anchos.insert(n.clone(), p.ancho).is_some() {
+                self.agregar(error(
+                    format!("`{n}` está declarada dos veces"),
+                    p.nombre.rango.clone(),
+                ));
+            }
         }
 
-        for (destino, valor) in &c.asignaciones {
-            let a = &self.ambitos[id];
-            let mensaje = if c.entradas.iter().any(|e| e.texto == destino.texto) {
-                "es una entrada: no se le puede asignar un valor"
-            } else if a.senales.contains_key(destino.texto.as_str())
-                || a.instancias.contains_key(destino.texto.as_str())
+        let mut planas = Vec::new();
+        self.desenrollar(&c.sentencias, &mut Vec::new(), &mut planas);
+        self.declarar_instancias(id, &planas);
+        self.inferir_anchos(id, &planas);
+        // Una asignación con error no repite el aviso de "nunca recibe un valor"
+        let mut fallidas = std::collections::HashSet::new();
+        for (s, vars) in &planas {
+            if let Sentencia::Asignar(destino, valor) = *s
+                && let Err(err) = self.asignar(id, destino, valor, vars)
             {
-                "ya tiene un valor: cada señal se asigna una sola vez"
-            } else {
-                match valor {
-                    Expr::Instancia(circuito, args) => {
-                        if let Some(hijo) = self.instanciar(id, destino, circuito, args) {
-                            self.ambitos[id].instancias.insert(&destino.texto, hijo);
-                        }
-                    }
-                    _ => {
-                        let antes = self.nodos.len();
-                        let r = self.construir(id, valor);
-                        if let Ref::Nodo(i) = r
-                            && i >= antes
-                        {
-                            self.nodos[i].nombre = destino.texto.clone();
-                        }
-                        self.ambitos[id].senales.insert(&destino.texto, r);
-                    }
-                }
+                self.agregar(err);
+                fallidas.insert(destino.nombre.texto.as_str());
+            }
+        }
+
+        for p in &c.salidas {
+            let bs = bits(&p.nombre.texto, p.ancho);
+            let senales = &self.ambitos[id].senales;
+            let faltan: Vec<String> = bs
+                .iter()
+                .filter(|b| !senales.contains_key(*b))
+                .cloned()
+                .collect();
+            let Some(primera) = faltan.first() else {
                 continue;
             };
-            self.error(format!("`{}` {mensaje}", destino.texto), destino);
-        }
-
-        for n in &c.salidas {
-            if !self.ambitos[id].senales.contains_key(n.texto.as_str()) {
-                self.error(format!("la salida `{}` nunca recibe un valor", n.texto), n);
+            if !fallidas.contains(p.nombre.texto.as_str()) {
+                let falta = if faltan.len() == bs.len() {
+                    &p.nombre.texto
+                } else {
+                    primera
+                };
+                let mensaje = format!("la salida `{falta}` nunca recibe un valor");
+                self.agregar(error(mensaje, p.nombre.rango.clone()));
+            }
+            // Relleno para que quien la lea no repita el error (igual no compila)
+            for b in faltan {
+                let r = Ref::Nodo(self.nodo(Tipo::Constante(false), Vec::new()));
+                self.ambitos[id].senales.insert(b, r);
             }
         }
         self.pila.pop();
         id
     }
 
+    /// Saca los `for`: cada sentencia queda con los valores de sus variables.
+    fn desenrollar(
+        &mut self,
+        sentencias: &'a [Sentencia],
+        vars: &mut Variables<'a>,
+        planas: &mut Vec<(&'a Sentencia, Variables<'a>)>,
+    ) {
+        for s in sentencias {
+            let Sentencia::For {
+                variable,
+                desde,
+                hasta,
+                cuerpo,
+            } = s
+            else {
+                planas.push((s, vars.clone()));
+                continue;
+            };
+            let (desde, hasta) = match (evaluar(desde, vars), evaluar(hasta, vars)) {
+                (Ok(d), Ok(h)) => (d, h),
+                (Err(err), _) | (_, Err(err)) => {
+                    self.agregar(err);
+                    continue;
+                }
+            };
+            if hasta.saturating_sub(desde) > MAXIMO {
+                self.agregar(error(
+                    format!("el `for` da demasiadas vueltas (máximo {MAXIMO})"),
+                    variable.rango.clone(),
+                ));
+                continue;
+            }
+            for v in desde..hasta {
+                vars.push((&variable.texto, v));
+                self.desenrollar(cuerpo, vars, planas);
+                vars.pop();
+            }
+        }
+    }
+
+    /// Anota las instancias antes que nada, así se puede leer `m.Salida` en
+    /// cualquier orden. Los arreglos se copian aquí mismo: sus entradas llegan
+    /// después con `fa[i].A = ...`.
+    fn declarar_instancias(&mut self, id: usize, planas: &[(&'a Sentencia, Variables<'a>)]) {
+        for (s, vars) in planas {
+            let (circuito, nombre, cantidad) = match *s {
+                Sentencia::Arreglo {
+                    circuito,
+                    nombre,
+                    cantidad,
+                } => (circuito, nombre, Some(cantidad)),
+                Sentencia::Asignar(d, Expr::Instancia(circuito, _))
+                    if d.indice.is_none() && d.miembro.is_none() =>
+                {
+                    (circuito, &d.nombre, None)
+                }
+                _ => continue,
+            };
+            let a = &self.ambitos[id];
+            let n = &nombre.texto;
+            if a.anchos.contains_key(n) || a.tipos.contains_key(n) || a.arreglos.contains_key(n) {
+                self.agregar(error(
+                    format!("`{n}` ya tiene un valor: cada nombre se usa una sola vez"),
+                    nombre.rango.clone(),
+                ));
+                continue;
+            }
+            let Some(c) = self.circuito(circuito) else {
+                continue;
+            };
+            let Some(cantidad) = cantidad else {
+                self.ambitos[id].tipos.insert(n.clone(), c);
+                continue;
+            };
+            let cantidad = match evaluar(cantidad, vars) {
+                Ok(k) if (1..=MAXIMO).contains(&k) => k as usize,
+                Ok(_) => {
+                    self.agregar(error(
+                        format!("un arreglo tiene de 1 a {MAXIMO} circuitos"),
+                        cantidad.rango.clone(),
+                    ));
+                    continue;
+                }
+                Err(err) => {
+                    self.agregar(err);
+                    continue;
+                }
+            };
+            self.ambitos[id].arreglos.insert(n.clone(), cantidad);
+            for k in 0..cantidad {
+                let clave = format!("{n}[{k}]");
+                let entradas = bits_de(&c.entradas)
+                    .into_iter()
+                    .map(|b| Ref::Senal(id, format!("{clave}.{b}"), nombre.rango.clone()))
+                    .collect();
+                self.ambitos[id].tipos.insert(clave.clone(), c);
+                let hijo = self.copiar(id, clave.clone(), c, entradas);
+                self.ambitos[id].instancias.insert(clave, hijo);
+            }
+        }
+    }
+
+    /// El ancho de las señales internas sale de lo que se les asigna:
+    /// `t[3] = ...` hace un bus de 4 bits; `x = and(A, B)` toma el ancho de A y B.
+    fn inferir_anchos(&mut self, id: usize, planas: &[(&'a Sentencia, Variables<'a>)]) {
+        let mut pendientes = Vec::new();
+        for (s, vars) in planas {
+            let Sentencia::Asignar(d, valor) = s else {
+                continue;
+            };
+            let a = &self.ambitos[id];
+            let n = &d.nombre.texto;
+            if d.miembro.is_some()
+                || matches!(valor, Expr::Instancia(..))
+                || a.tipos.contains_key(n)
+                || a.arreglos.contains_key(n)
+                || puerto(&a.circuito.entradas, n).is_some()
+                || puerto(&a.circuito.salidas, n).is_some()
+            {
+                continue;
+            }
+            match &d.indice {
+                None => pendientes.push((n, valor, vars)),
+                Some(ix) => {
+                    let alto = [Some(&ix.desde), ix.hasta.as_ref()]
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|e| evaluar(e, vars).ok())
+                        .max()
+                        .unwrap_or(-1);
+                    if (0..64).contains(&alto) {
+                        let ancho = self.ambitos[id].anchos.entry(n.clone()).or_insert(Some(1));
+                        *ancho = Some(ancho.unwrap_or(1).max(alto as usize + 1));
+                    }
+                }
+            }
+        }
+        pendientes.retain(|(n, ..)| !self.ambitos[id].anchos.contains_key(*n));
+
+        // Se repite hasta que todo tenga ancho. Lo que depende de sí mismo
+        // (realimentación) se supone de 1 bit.
+        // ponytail: un lazo de buses sin ningún ancho conocido queda de 1 bit.
+        let mut suponer = false;
+        while !pendientes.is_empty() {
+            let antes = pendientes.len();
+            let mut i = 0;
+            while i < pendientes.len() {
+                let (n, valor, vars) = pendientes[i];
+                match self.ancho(id, valor, vars, suponer) {
+                    Some(w) => {
+                        let ancho = if w == 1 { None } else { Some(w) };
+                        self.ambitos[id].anchos.entry(n.clone()).or_insert(ancho);
+                        pendientes.remove(i);
+                    }
+                    None => i += 1,
+                }
+            }
+            suponer = pendientes.len() == antes;
+        }
+    }
+
+    /// Cuántos bits da una expresión; `None` si usa una señal de ancho desconocido.
+    fn ancho(&self, id: usize, e: &Expr, vars: &Variables, suponer: bool) -> Option<usize> {
+        match e {
+            Expr::Constante(_) | Expr::Instancia(..) => Some(1),
+            Expr::Senal(a) => {
+                let ambito = &self.ambitos[id];
+                if a.miembro.is_none() && !ambito.anchos.contains_key(&a.nombre.texto) {
+                    return suponer.then_some(1);
+                }
+                // Si tiene un error se avisará al construirla
+                Some(self.leer(id, a, vars).map_or(1, |r| r.len()))
+            }
+            Expr::Compuerta(_, partes) => partes
+                .iter()
+                .map(|p| self.ancho(id, p, vars, suponer))
+                .try_fold(1, |m, w| Some(m.max(w?))),
+            Expr::Split(_, partes, _) => partes
+                .iter()
+                .map(|p| self.ancho(id, p, vars, suponer))
+                .sum(),
+        }
+    }
+
+    /// `m` o `fa[2]`: el nombre de la instancia y su circuito
+    fn instancia(
+        &self,
+        id: usize,
+        nombre: &Nombre,
+        indice: Option<&Indice>,
+        vars: &Variables,
+    ) -> Result<(String, &'a Circuito), Error> {
+        let a = &self.ambitos[id];
+        let n = &nombre.texto;
+        let clave = match (a.arreglos.get(n), indice) {
+            (Some(&cantidad), None) => {
+                return Err(error(
+                    format!(
+                        "`{n}` es un arreglo de {cantidad} circuitos: elige uno, como `{n}[0]`"
+                    ),
+                    nombre.rango.clone(),
+                ));
+            }
+            (Some(&cantidad), Some(ix)) => {
+                if ix.hasta.is_some() {
+                    return Err(error(
+                        format!("elige un solo circuito del arreglo, como `{n}[0]`"),
+                        ix.rango.clone(),
+                    ));
+                }
+                let k = evaluar(&ix.desde, vars)?;
+                if !(0..cantidad as i64).contains(&k) {
+                    return Err(error(
+                        format!(
+                            "`{n}` tiene {cantidad} circuitos: el índice {k} no existe (van de 0 a {})",
+                            cantidad - 1
+                        ),
+                        ix.rango.clone(),
+                    ));
+                }
+                format!("{n}[{k}]")
+            }
+            (None, Some(ix)) if a.tipos.contains_key(n) => {
+                return Err(error(
+                    format!("`{n}` es un solo circuito: no lleva índice"),
+                    ix.rango.clone(),
+                ));
+            }
+            (None, _) => n.clone(),
+        };
+        match a.tipos.get(&clave) {
+            Some(&c) => Ok((clave, c)),
+            None => Err(error(
+                format!("`{n}` no es un circuito"),
+                nombre.rango.clone(),
+            )),
+        }
+    }
+
+    /// Los bits que se leen con `A`, `A[3]`, `m.Suma` o `fa[i].S[0..3]`
+    fn leer(&self, id: usize, a: &Acceso, vars: &Variables) -> Result<Vec<Ref>, Error> {
+        let n = &a.nombre.texto;
+        let rango = a.nombre.rango.clone();
+        if let Some((salida, indice)) = &a.miembro {
+            let (clave, c) = self.instancia(id, &a.nombre, a.indice.as_deref(), vars)?;
+            let Some(p) = puerto(&c.salidas, &salida.texto) else {
+                let mensaje = if puerto(&c.entradas, &salida.texto).is_some() {
+                    format!(
+                        "`{}` es una entrada de `{}`: solo se leen sus salidas",
+                        salida.texto, c.nombre.texto
+                    )
+                } else {
+                    format!("`{}` no tiene la salida `{}`", c.nombre.texto, salida.texto)
+                };
+                return Err(error(mensaje, salida.rango.clone()));
+            };
+            let bs = elegir(&salida.texto, p.ancho, indice.as_deref(), vars)?;
+            return Ok(bs
+                .into_iter()
+                .map(|b| Ref::Miembro(id, clave.clone(), b, rango.clone()))
+                .collect());
+        }
+        let ambito = &self.ambitos[id];
+        if let Some(&ancho) = ambito.anchos.get(n) {
+            let bs = elegir(n, ancho, a.indice.as_deref(), vars)?;
+            return Ok(bs
+                .into_iter()
+                .map(|b| Ref::Senal(id, b, rango.clone()))
+                .collect());
+        }
+        let mensaje = if ambito.tipos.contains_key(n) || ambito.arreglos.contains_key(n) {
+            format!("`{n}` es un circuito, no una señal: usa una de sus salidas, como `{n}.Salida`")
+        } else {
+            format!("`{n}` no existe: declárala con `in` o asígnale un valor")
+        };
+        Err(error(mensaje, rango))
+    }
+
+    /// Los bits a los que se asigna: `X`, `S[3]`, `S[0..3]` o `fa[i].Cin`
+    fn destinos(&self, id: usize, d: &Acceso, vars: &Variables) -> Result<Vec<String>, Error> {
+        let a = &self.ambitos[id];
+        let n = &d.nombre.texto;
+        if let Some((entrada, indice)) = &d.miembro {
+            let (clave, c) = self.instancia(id, &d.nombre, d.indice.as_deref(), vars)?;
+            if !a.arreglos.contains_key(n) {
+                return Err(error(
+                    format!(
+                        "las entradas de `{n}` ya se conectaron al crearlo con `{n} = {}(...)`",
+                        c.nombre.texto
+                    ),
+                    entrada.rango.clone(),
+                ));
+            }
+            let Some(p) = puerto(&c.entradas, &entrada.texto) else {
+                let mensaje = if puerto(&c.salidas, &entrada.texto).is_some() {
+                    format!(
+                        "`{}` es una salida de `{}`: no se le asigna un valor",
+                        entrada.texto, c.nombre.texto
+                    )
+                } else {
+                    format!(
+                        "`{}` no tiene la entrada `{}`",
+                        c.nombre.texto, entrada.texto
+                    )
+                };
+                return Err(error(mensaje, entrada.rango.clone()));
+            };
+            let bs = elegir(&entrada.texto, p.ancho, indice.as_deref(), vars)?;
+            return Ok(bs.into_iter().map(|b| format!("{clave}.{b}")).collect());
+        }
+        let mensaje = if puerto(&a.circuito.entradas, n).is_some() {
+            "es una entrada: no se le puede asignar un valor"
+        } else if a.tipos.contains_key(n) || a.arreglos.contains_key(n) {
+            "ya tiene un valor: cada nombre se usa una sola vez"
+        } else {
+            let ancho = a.anchos.get(n).copied().flatten();
+            return elegir(n, ancho, d.indice.as_deref(), vars);
+        };
+        Err(error(format!("`{n}` {mensaje}"), d.nombre.rango.clone()))
+    }
+
+    fn asignar(
+        &mut self,
+        id: usize,
+        d: &'a Acceso,
+        valor: &'a Expr,
+        vars: &Variables<'a>,
+    ) -> Result<(), Error> {
+        if let Expr::Instancia(circuito, args) = valor {
+            if d.indice.is_some() || d.miembro.is_some() {
+                return Err(error(
+                    format!(
+                        "un circuito se guarda en un nombre simple, como `m = {0}(...);`; para varias copias usa `{0} m[8];`",
+                        circuito.texto
+                    ),
+                    circuito.rango.clone(),
+                ));
+            }
+            let n = &d.nombre.texto;
+            if self.ambitos[id].instancias.contains_key(n) {
+                return Err(error(
+                    format!("`{n}` ya tiene un valor: cada nombre se usa una sola vez"),
+                    d.nombre.rango.clone(),
+                ));
+            }
+            // Si no está anotada, ya se avisó por qué
+            let Some(&c) = self.ambitos[id].tipos.get(n) else {
+                return Ok(());
+            };
+            return self.instanciar(id, n.clone(), c, circuito, args, vars);
+        }
+
+        let antes = self.nodos.len();
+        let fuentes = self.construir(id, valor, vars)?;
+        let destinos = self.destinos(id, d, vars)?;
+        if fuentes.len() != destinos.len() {
+            return Err(error(
+                format!(
+                    "`{}` es de {}, pero recibe {}",
+                    d.nombre.texto,
+                    en_bits(destinos.len()),
+                    en_bits(fuentes.len())
+                ),
+                d.nombre.rango.clone(),
+            ));
+        }
+        for (b, r) in destinos.into_iter().zip(fuentes) {
+            if self.ambitos[id].senales.contains_key(&b) {
+                return Err(error(
+                    format!("`{b}` ya tiene un valor: cada señal se asigna una sola vez"),
+                    d.nombre.rango.clone(),
+                ));
+            }
+            if let Ref::Nodo(i) = r
+                && i >= antes
+                && self.nodos[i].nombre.is_empty()
+            {
+                self.nodos[i].nombre = b.clone();
+            }
+            self.ambitos[id].senales.insert(b, r);
+        }
+        Ok(())
+    }
+
     /// `m = MedioSumador(A, B);` dentro del ámbito `padre`
     fn instanciar(
         &mut self,
         padre: usize,
-        destino: &'a Nombre,
-        circuito: &'a Nombre,
+        nombre: String,
+        c: &'a Circuito,
+        circuito: &Nombre,
         args: &'a [Expr],
-    ) -> Option<usize> {
-        let Some(&c) = self.circuitos.get(circuito.texto.as_str()) else {
-            self.error(
-                format!("`{}` no es un circuito del proyecto", circuito.texto),
-                circuito,
-            );
-            return None;
-        };
-        if self.pila.contains(&c.nombre.texto.as_str()) {
-            self.error(
-                format!("`{}` se usa dentro de sí mismo", circuito.texto),
-                circuito,
-            );
-            return None;
-        }
+        vars: &Variables<'a>,
+    ) -> Result<(), Error> {
         if args.len() != c.entradas.len() {
             let plural = if c.entradas.len() == 1 {
                 "entrada"
             } else {
                 "entradas"
             };
-            self.error(
+            return Err(error(
                 format!(
                     "`{}` lleva {} {plural}, pero tiene {}",
                     circuito.texto,
                     c.entradas.len(),
                     args.len()
                 ),
-                circuito,
-            );
-            return None;
+                circuito.rango.clone(),
+            ));
         }
-        let entradas: Vec<Ref> = args.iter().map(|a| self.construir(padre, a)).collect();
-        // Lo que se copia de una instancia del principal (con sus instancias
-        // internas) se dibuja dentro de su caja
+        let mut entradas = Vec::new();
+        for (p, arg) in c.entradas.iter().zip(args) {
+            let bits = self.construir(padre, arg, vars)?;
+            let ancho = p.ancho.unwrap_or(1);
+            if bits.len() != ancho {
+                return Err(error(
+                    format!(
+                        "la entrada `{}` de `{}` es de {}, pero recibe {}",
+                        p.nombre.texto,
+                        circuito.texto,
+                        en_bits(ancho),
+                        en_bits(bits.len())
+                    ),
+                    rango_de(arg),
+                ));
+            }
+            entradas.extend(bits);
+        }
+        let hijo = self.copiar(padre, nombre.clone(), c, entradas);
+        self.ambitos[padre].instancias.insert(nombre, hijo);
+        Ok(())
+    }
+
+    /// Copia `c` dentro de `padre`. Lo que se copia de una instancia del
+    /// principal (con sus instancias internas) se dibuja dentro de su caja.
+    fn copiar(
+        &mut self,
+        padre: usize,
+        nombre: String,
+        c: &'a Circuito,
+        entradas: Vec<Ref>,
+    ) -> usize {
         let arriba = padre == 0;
+        let g = self.instancias.len();
         if arriba {
-            self.actual = Some(self.instancias.len());
-            self.instancias.push((destino, c, entradas.clone()));
+            self.actual = Some(g);
+            self.instancias.push(Caja {
+                nombre,
+                circuito: c.nombre.texto.clone(),
+                entradas: bits_de(&c.entradas)
+                    .into_iter()
+                    .zip(entradas.clone())
+                    .collect(),
+                salidas: Vec::new(),
+                split: None,
+            });
         }
         let hijo = self.ambito(c, Some(entradas));
         if arriba {
             self.actual = None;
+            self.instancias[g].salidas = bits_de(&c.salidas)
+                .into_iter()
+                .map(|b| (b.clone(), Ref::Senal(hijo, b, 0..0)))
+                .collect();
         }
-        Some(hijo)
+        hijo
     }
 
-    /// Crea los nodos de una expresión (las compuertas anidadas también).
-    fn construir(&mut self, ambito: usize, e: &'a Expr) -> Ref<'a> {
+    /// Crea los nodos de una expresión (las compuertas anidadas también) y
+    /// devuelve sus bits, del más bajo al más alto.
+    fn construir(&mut self, id: usize, e: &'a Expr, vars: &Variables) -> Result<Vec<Ref>, Error> {
         match e {
-            Expr::Senal(n) => Ref::Senal(ambito, n),
-            Expr::Miembro(m, salida) => Ref::Miembro(ambito, m, salida),
-            Expr::Constante(v) => Ref::Nodo(self.nodo(Tipo::Constante(*v), Vec::new())),
+            Expr::Senal(a) => self.leer(id, a, vars),
+            Expr::Constante(v) => Ok(vec![Ref::Nodo(self.nodo(Tipo::Constante(*v), Vec::new()))]),
             Expr::Compuerta(c, args) => {
-                let fuentes = args.iter().map(|a| self.construir(ambito, a)).collect();
-                Ref::Nodo(self.nodo(Tipo::Compuerta(*c), fuentes))
+                let mut partes = Vec::new();
+                for a in args {
+                    partes.push(self.construir(id, a, vars)?);
+                }
+                // Un bit suelto se repite para cada bit del bus: and(D, E) con D de 8 bits
+                let ancho = partes.iter().map(Vec::len).max().unwrap_or(1);
+                for (p, a) in partes.iter().zip(args) {
+                    if p.len() != ancho && p.len() != 1 {
+                        return Err(error(
+                            format!(
+                                "las entradas de `{}` deben tener el mismo ancho (o 1 bit): hay de {} y de {}",
+                                c.nombre(),
+                                en_bits(ancho),
+                                en_bits(p.len())
+                            ),
+                            rango_de(a),
+                        ));
+                    }
+                }
+                Ok((0..ancho)
+                    .map(|k| {
+                        let fuentes = partes
+                            .iter()
+                            .map(|p| p[if p.len() == 1 { 0 } else { k }].clone())
+                            .collect();
+                        Ref::Nodo(self.nodo(Tipo::Compuerta(*c), fuentes))
+                    })
+                    .collect())
             }
-            Expr::Instancia(circuito, _) => {
-                self.error(
-                    format!(
-                        "`{0}(...)` crea un circuito: asígnalo a un nombre (`m = {0}(...);`) y usa sus salidas con `m.Salida`",
-                        circuito.texto
-                    ),
-                    circuito,
-                );
-                Ref::Nodo(self.nodo(Tipo::Constante(false), Vec::new()))
+            Expr::Split(separa, partes, rango) => {
+                let mut bits = Vec::new();
+                for p in partes {
+                    bits.extend(self.construir(id, p, vars)?);
+                }
+                if bits.len() < 2 {
+                    return Err(error(
+                        "`split.derecha` separa un bus de 2 o más bits; la señal es de 1 bit"
+                            .into(),
+                        rango.clone(),
+                    ));
+                }
+                // En el circuito principal se dibuja: un buffer por bit dentro de su caja
+                if id != 0 {
+                    return Ok(bits);
+                }
+                let g = self.instancias.len();
+                self.actual = Some(g);
+                let salidas: Vec<Ref> = bits
+                    .iter()
+                    .map(|b| {
+                        Ref::Nodo(self.nodo(Tipo::Compuerta(Compuerta::Buffer), vec![b.clone()]))
+                    })
+                    .collect();
+                self.actual = None;
+                // Los pines sueltos llevan su número; el lado del bus no lleva nada
+                let n = bits.len();
+                let separa = *separa;
+                let pines = |suelto: bool| {
+                    (0..n).map(move |k| if suelto { k.to_string() } else { String::new() })
+                };
+                self.instancias.push(Caja {
+                    // ponytail: se ubica por orden; si cambia el código puede saltar de lugar
+                    nombre: format!("split{g}"),
+                    circuito: "split".into(),
+                    entradas: pines(!separa).zip(bits).collect(),
+                    salidas: pines(separa).zip(salidas.clone()).collect(),
+                    split: Some(if separa { Split::Separa } else { Split::Junta }),
+                });
+                Ok(salidas)
             }
+            Expr::Instancia(circuito, _) => Err(error(
+                format!(
+                    "`{0}(...)` crea un circuito: asígnalo a un nombre (`m = {0}(...);`) y usa sus salidas con `m.Salida`",
+                    circuito.texto
+                ),
+                circuito.rango.clone(),
+            )),
         }
     }
 
     /// Sigue los nombres (`X = Y;`, entradas de instancias, `m.Suma`) hasta llegar a un nodo.
-    fn resolver(&self, mut r: Ref<'a>) -> Result<usize, Error> {
+    fn resolver(&self, mut r: Ref) -> Result<usize, Error> {
         let mut primero = None;
         // Sin ciclos se pasa por cada nombre una vez, más un `m.Salida` por cada uno
         let limite: usize = 2 * self
@@ -339,53 +1009,37 @@ impl<'a> Elaborador<'a> {
         for _ in 0..=limite {
             r = match r {
                 Ref::Nodo(i) => return Ok(i),
-                Ref::Senal(a, n) => {
-                    primero.get_or_insert(n);
-                    let ambito = &self.ambitos[a];
-                    match ambito.senales.get(n.texto.as_str()) {
-                        Some(&siguiente) => siguiente,
-                        None if ambito.instancias.contains_key(n.texto.as_str()) => {
+                Ref::Senal(a, n, rango) => {
+                    primero.get_or_insert((n.clone(), rango.clone()));
+                    match self.ambitos[a].senales.get(&n) {
+                        Some(siguiente) => siguiente.clone(),
+                        // `fa[2].Cin`: entrada de un arreglo que nadie conectó
+                        None if n.contains('.') => {
                             return Err(error(
                                 format!(
-                                    "`{0}` es un circuito, no una señal: usa una de sus salidas, como `{0}.Salida`",
-                                    n.texto
+                                    "la entrada `{n}` no está conectada: asígnale una señal con `{n} = ...;`"
                                 ),
-                                n,
+                                rango,
                             ));
                         }
                         None => {
                             return Err(error(
-                                format!(
-                                    "`{}` no existe: declárala con `in` o asígnale un valor",
-                                    n.texto
-                                ),
-                                n,
+                                format!("`{n}` no existe: declárala con `in` o asígnale un valor"),
+                                rango,
                             ));
                         }
                     }
                 }
-                Ref::Miembro(a, m, salida) => {
-                    let Some(&hijo) = self.ambitos[a].instancias.get(m.texto.as_str()) else {
-                        return Err(error(format!("`{}` no es un circuito", m.texto), m));
-                    };
-                    let c = self.ambitos[hijo].circuito;
-                    if !c.salidas.iter().any(|s| s.texto == salida.texto) {
-                        return Err(error(
-                            format!("`{}` no tiene la salida `{}`", c.nombre.texto, salida.texto),
-                            salida,
-                        ));
-                    }
-                    Ref::Senal(hijo, salida)
-                }
+                Ref::Miembro(a, m, bit, rango) => match self.ambitos[a].instancias.get(&m) {
+                    Some(&hijo) => Ref::Senal(hijo, bit, rango),
+                    None => return Err(error(format!("`{m}` no es un circuito"), rango)),
+                },
             };
         }
-        let n = primero.expect("el lazo pasó por al menos un nombre");
+        let (n, rango) = primero.expect("el lazo pasó por al menos un nombre");
         Err(error(
-            format!(
-                "`{}` se define a sí misma sin pasar por ninguna compuerta",
-                n.texto
-            ),
-            n,
+            format!("`{n}` se define a sí misma sin pasar por ninguna compuerta"),
+            rango,
         ))
     }
 }
@@ -393,6 +1047,7 @@ impl<'a> Elaborador<'a> {
 #[cfg(test)]
 mod tests {
     use crate::compilar;
+    use crate::netlist::Tipo;
 
     fn errores(fuente: &str) -> Vec<String> {
         compilar(fuente)
@@ -403,6 +1058,18 @@ mod tests {
     }
 
     const MEDIO_SUMADOR: &str = "circuit MedioSumador { in A, B; out Suma, Acarreo; Suma = xor(A, B); Acarreo = and(A, B); }";
+
+    const SUMADOR_4: &str = "
+        circuit FullAdder { in A, B, Cin; out Sum, Cout;
+            Sum = xor(A, B, Cin); Cout = or(and(A, B), and(Cin, xor(A, B))); }
+        circuit Adder4 {
+            in A[4], B[4], Cin; out S[4], Cout;
+            FullAdder fa[4];
+            for (i = 0; i < 4; i++) { fa[i].A = A[i]; fa[i].B = B[i]; S[i] = fa[i].Sum; }
+            fa[0].Cin = Cin;
+            for (i = 1; i < 4; i++) { fa[i].Cin = fa[i-1].Cout; }
+            Cout = fa[3].Cout;
+        }";
 
     #[test]
     fn conecta_en_cualquier_orden_y_con_realimentacion() {
@@ -418,13 +1085,13 @@ mod tests {
     #[test]
     fn errores_de_conexion() {
         assert_eq!(
-            errores("main { in A, A; out X, Y; X = and(A, B); A = 1; X = 0; Z = W; W = Z; }"),
+            errores("main { in A, A; out X, Y; X = and(A, B); A = 1; X = 0; X = 1; }"),
             [
                 "`A` está declarada dos veces",
+                "`B` no existe: declárala con `in` o asígnale un valor",
                 "`A` es una entrada: no se le puede asignar un valor",
                 "`X` ya tiene un valor: cada señal se asigna una sola vez",
                 "la salida `Y` nunca recibe un valor",
-                "`B` no existe: declárala con `in` o asígnale un valor",
             ]
         );
         assert_eq!(
@@ -504,6 +1171,116 @@ mod tests {
                 "circuit Bucle { in A; out X; b = Bucle(A); X = b.X; } main { out Y; b = Bucle(1); Y = b.X; }"
             ),
             ["`Bucle` se usa dentro de sí mismo", "`b` no es un circuito"]
+        );
+    }
+
+    #[test]
+    fn buses_bit_a_bit_y_unir() {
+        let red = compilar(
+            "circuit N { in A[4], B[4], E; out X[4], Y[4], Z[2];
+             X = and(A, B); Y = and(A, E); Z = split.izquierda(B[0], A[3]); }",
+        )
+        .unwrap();
+        let nombres: Vec<&str> = red
+            .nodos
+            .iter()
+            .filter(|n| matches!(n.tipo, Tipo::Entrada(_)))
+            .map(|n| n.nombre.as_str())
+            .collect();
+        assert_eq!(
+            nombres,
+            [
+                "A[0]", "A[1]", "A[2]", "A[3]", "B[0]", "B[1]", "B[2]", "B[3]", "E"
+            ]
+        );
+        // 9 entradas, 4 + 4 compuertas, 2 buffers del split, 10 salidas
+        assert_eq!(red.nodos.len(), 9 + 8 + 2 + 10);
+        assert_eq!(red.nodos[9].entradas, [0, 4]); // X[0] = and(A[0], B[0])
+        assert_eq!(red.nodos[9].nombre, "X[0]");
+        assert_eq!(red.nodos[16].entradas, [3, 8]); // Y[3] = and(A[3], E)
+        // split.izquierda(B[0], A[3]): el primero es el bit 0; cada bit pasa por un buffer de la caja
+        let caja = &red.instancias[0];
+        assert_eq!(caja.split, Some(super::Split::Junta));
+        assert_eq!(caja.entradas, [("0".into(), 4), ("1".into(), 3)]);
+        assert_eq!(caja.salidas, [(String::new(), 17), (String::new(), 18)]);
+        assert_eq!(red.nodos[17].nombre, "Z[0]");
+        assert_eq!(red.nodos[17].instancia, Some(0));
+        let z1 = red
+            .nodos
+            .iter()
+            .find(|n| n.nombre == "Z[1]" && n.instancia.is_none())
+            .unwrap();
+        assert_eq!(z1.entradas, [18]);
+        // Separar: entra el bus por un pin, salen los bits numerados
+        let red = compilar(
+            "circuit S { in A[2]; out a0, a1; a = split.derecha(A); a0 = a[0]; a1 = a[1]; }",
+        )
+        .unwrap();
+        assert_eq!(red.instancias[0].split, Some(super::Split::Separa));
+        assert_eq!(red.instancias[0].salidas[1].0, "1");
+    }
+
+    #[test]
+    fn arreglos_y_for() {
+        let red = compilar(SUMADOR_4).unwrap();
+        assert_eq!(red.nombre, "Adder4");
+        assert_eq!(red.instancias.len(), 4);
+        assert_eq!(red.instancias[3].nombre, "fa[3]");
+        let salidas = red
+            .nodos
+            .iter()
+            .filter(|n| matches!(n.tipo, Tipo::Salida(_)))
+            .count();
+        assert_eq!(salidas, 5);
+        // Señales internas: el ancho sale de lo que se asigna
+        assert!(
+            compilar("circuit T { in A[4]; out X[4]; t = not(A); u[1] = A[0]; u[0] = 1; X = split.izquierda(u, t[2..3]); }")
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn errores_de_buses() {
+        assert_eq!(
+            errores("main { in A; out X; X = split.derecha(A); }"),
+            ["`split.derecha` separa un bus de 2 o más bits; la señal es de 1 bit"]
+        );
+
+        assert_eq!(
+            errores("main { in A[4], B[2]; out X[4]; X = and(A, B); }"),
+            [
+                "las entradas de `and` deben tener el mismo ancho (o 1 bit): hay de 4 bits y de 2 bits"
+            ]
+        );
+        assert_eq!(
+            errores("main { in A[4]; out X; X = A; }"),
+            ["`X` es de 1 bit, pero recibe 4 bits"]
+        );
+        assert_eq!(
+            errores("main { in A[4]; out X; X = A[4]; }"),
+            ["`A` tiene 4 bits: el índice 4 no existe (van de 0 a 3)"]
+        );
+        assert_eq!(
+            errores("main { in A; out X; X = A[0]; }"),
+            ["`A` es de un bit: no lleva índice"]
+        );
+        assert_eq!(
+            errores("main { in A[2]; out X[2]; X[0] = A[j]; X[1] = A[1]; }")[0],
+            "`j` no es una variable de `for`: en los índices solo van números y la variable del `for`"
+        );
+        assert_eq!(
+            errores("main { in A; out S[2]; S[0] = A; }"),
+            ["la salida `S[1]` nunca recibe un valor"]
+        );
+        let sin_acarreo = SUMADOR_4.replace("fa[0].Cin = Cin;", "");
+        assert_eq!(
+            errores(&sin_acarreo),
+            ["la entrada `fa[0].Cin` no está conectada: asígnale una señal con `fa[0].Cin = ...;`"]
+        );
+        let fuera = SUMADOR_4.replace("i < 4; i++) { fa[i].Cin", "i < 5; i++) { fa[i].Cin");
+        assert_eq!(
+            errores(&fuera),
+            ["`fa` tiene 4 circuitos: el índice 4 no existe (van de 0 a 3)"]
         );
     }
 }

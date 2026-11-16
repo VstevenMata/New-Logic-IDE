@@ -10,7 +10,7 @@ use eframe::egui::{
     Stroke, StrokeKind, Theme, Vec2, pos2, vec2,
 };
 use logicsm_core::Compuerta;
-use logicsm_core::netlist::{Netlist, Nodo, Tipo};
+use logicsm_core::netlist::{Netlist, Nodo, Split, Tipo};
 use std::collections::HashMap;
 
 /// Colores de un tema. Hay dos: CLARO (pastel de index.html) y OSCURO.
@@ -1282,7 +1282,11 @@ fn descripcion(red: &Netlist, pieza: Pieza) -> String {
     match pieza {
         Pieza::Caja(g) => {
             let inst = &red.instancias[g];
-            format!("{}: {}", inst.nombre, inst.circuito)
+            match inst.split {
+                Some(Split::Separa) => format!("split: separa {} bits", inst.salidas.len()),
+                Some(Split::Junta) => format!("split: junta {} bits", inst.entradas.len()),
+                None => format!("{}: {}", inst.nombre, inst.circuito),
+            }
         }
         Pieza::Nodo(i) => {
             let n = &red.nodos[i];
@@ -1345,6 +1349,9 @@ fn dibujar(
         Pieza::Caja(g) => {
             let inst = &red.instancias[g];
             let pines = inst.entradas.len().max(inst.salidas.len());
+            if inst.split.is_some() {
+                return vec2(8.0, (pines as f32 * 16.0 + 8.0).max(30.0));
+            }
             vec2(
                 (inst.circuito.len() as f32 * 7.0 + 20.0).max(96.0),
                 (pines as f32 * 18.0 + 30.0).max(48.0),
@@ -1434,6 +1441,8 @@ fn dibujar(
                 let burbuja = matches!(red.nodos[i].tipo, Tipo::Compuerta(g) if invertida(g));
                 pos2(r.right() + if burbuja { 8.0 } else { 0.0 }, r.center().y)
             }
+            // El bus de un split sale por un solo pin, al medio
+            Pieza::Caja(g) if red.instancias[g].split == Some(Split::Junta) => r.right_center(),
             Pieza::Caja(g) => {
                 let salidas = &red.instancias[g].salidas;
                 let k = salidas.iter().position(|s| s.1 == f).unwrap_or(0);
@@ -1444,6 +1453,9 @@ fn dibujar(
     // Dónde llega la entrada `k` de la pieza `j`
     let pin_entrada = |j: usize, k: usize| {
         let r = caja(j);
+        if matches!(piezas[j], Pieza::Caja(g) if red.instancias[g].split == Some(Split::Separa)) {
+            return r.left_center();
+        }
         let n = fuentes[j].len();
         let y = altura_pin(r, k, n);
         // Las OR y XOR tienen la parte de atrás curva
@@ -1500,6 +1512,26 @@ fn dibujar(
         let r = caja(j);
         let i = match pieza {
             Pieza::Nodo(i) => i,
+            Pieza::Caja(g) if red.instancias[g].split.is_some() => {
+                // Split: barra con el número de cada bit sobre su pin
+                let inst = &red.instancias[g];
+                p.rect_filled(r, 2.0, c.tinta);
+                let (pines, x, alinear) = match inst.split {
+                    Some(Split::Separa) => (&inst.salidas, r.right() + 3.0, Align2::LEFT_BOTTOM),
+                    _ => (&inst.entradas, r.left() - 3.0, Align2::RIGHT_BOTTOM),
+                };
+                for (k, (nombre, _)) in pines.iter().enumerate() {
+                    let y = altura_pin(r, k, pines.len());
+                    p.text(
+                        pos2(x, y - 1.0),
+                        alinear,
+                        nombre,
+                        FontId::monospace(9.0),
+                        c.tenue,
+                    );
+                }
+                continue;
+            }
             Pieza::Caja(g) => {
                 // Caja con el nombre del circuito, la instancia arriba y los pines rotulados
                 let inst = &red.instancias[g];
