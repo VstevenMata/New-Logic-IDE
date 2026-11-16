@@ -686,7 +686,7 @@ impl<'a> Elaborador<'a> {
         let n = &a.nombre.texto;
         let rango = a.nombre.rango.clone();
         if let Some((salida, indice)) = &a.miembro {
-            let (clave, c) = self.instancia(id, &a.nombre, a.indice.as_ref(), vars)?;
+            let (clave, c) = self.instancia(id, &a.nombre, a.indice.as_deref(), vars)?;
             let Some(p) = puerto(&c.salidas, &salida.texto) else {
                 let mensaje = if puerto(&c.entradas, &salida.texto).is_some() {
                     format!(
@@ -698,7 +698,7 @@ impl<'a> Elaborador<'a> {
                 };
                 return Err(error(mensaje, salida.rango.clone()));
             };
-            let bs = elegir(&salida.texto, p.ancho, indice.as_ref(), vars)?;
+            let bs = elegir(&salida.texto, p.ancho, indice.as_deref(), vars)?;
             return Ok(bs
                 .into_iter()
                 .map(|b| Ref::Miembro(id, clave.clone(), b, rango.clone()))
@@ -706,7 +706,7 @@ impl<'a> Elaborador<'a> {
         }
         let ambito = &self.ambitos[id];
         if let Some(&ancho) = ambito.anchos.get(n) {
-            let bs = elegir(n, ancho, a.indice.as_ref(), vars)?;
+            let bs = elegir(n, ancho, a.indice.as_deref(), vars)?;
             return Ok(bs
                 .into_iter()
                 .map(|b| Ref::Senal(id, b, rango.clone()))
@@ -725,7 +725,7 @@ impl<'a> Elaborador<'a> {
         let a = &self.ambitos[id];
         let n = &d.nombre.texto;
         if let Some((entrada, indice)) = &d.miembro {
-            let (clave, c) = self.instancia(id, &d.nombre, d.indice.as_ref(), vars)?;
+            let (clave, c) = self.instancia(id, &d.nombre, d.indice.as_deref(), vars)?;
             if !a.arreglos.contains_key(n) {
                 return Err(error(
                     format!(
@@ -749,7 +749,7 @@ impl<'a> Elaborador<'a> {
                 };
                 return Err(error(mensaje, entrada.rango.clone()));
             };
-            let bs = elegir(&entrada.texto, p.ancho, indice.as_ref(), vars)?;
+            let bs = elegir(&entrada.texto, p.ancho, indice.as_deref(), vars)?;
             return Ok(bs.into_iter().map(|b| format!("{clave}.{b}")).collect());
         }
         let mensaje = if puerto(&a.circuito.entradas, n).is_some() {
@@ -758,7 +758,7 @@ impl<'a> Elaborador<'a> {
             "ya tiene un valor: cada nombre se usa una sola vez"
         } else {
             let ancho = a.anchos.get(n).copied().flatten();
-            return elegir(n, ancho, d.indice.as_ref(), vars);
+            return elegir(n, ancho, d.indice.as_deref(), vars);
         };
         Err(error(format!("`{n}` {mensaje}"), d.nombre.rango.clone()))
     }

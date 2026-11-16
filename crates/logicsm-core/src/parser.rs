@@ -52,9 +52,10 @@ pub enum Sentencia {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Acceso {
     pub nombre: Nombre,
-    pub indice: Option<Indice>,
+    /// En caja: sin ella cada `Acceso` (y cada `Expr`) pesaría ~270 bytes
+    pub indice: Option<Box<Indice>>,
     /// `.Salida` con su propio índice
-    pub miembro: Option<(Nombre, Option<Indice>)>,
+    pub miembro: Option<(Nombre, Option<Box<Indice>>)>,
 }
 
 /// `[i]` o `[a..b]` (inclusivo, en cualquier sentido)
@@ -355,7 +356,7 @@ impl Parser<'_> {
     }
 
     /// `[i]` o `[a..b]`, si hay
-    fn indice(&mut self) -> Result<Option<Indice>, Error> {
+    fn indice(&mut self) -> Result<Option<Box<Indice>>, Error> {
         let Tipo::CorAbre = self.actual().tipo else {
             return Ok(None);
         };
@@ -367,11 +368,11 @@ impl Parser<'_> {
             None
         };
         let fin = self.esperar(Tipo::CorCierra, "`]` o `..`")?.rango.end;
-        Ok(Some(Indice {
+        Ok(Some(Box::new(Indice {
             desde,
             hasta,
             rango: inicio..fin,
-        }))
+        })))
     }
 
     /// `3`, `i`, `i - 1 + 2`
