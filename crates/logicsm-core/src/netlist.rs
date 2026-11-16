@@ -502,8 +502,7 @@ impl<'a> Elaborador<'a> {
             };
             let a = &self.ambitos[id];
             let n = &nombre.texto;
-            if a.anchos.contains_key(n) || a.tipos.contains_key(n) || a.arreglos.contains_key(n)
-            {
+            if a.anchos.contains_key(n) || a.tipos.contains_key(n) || a.arreglos.contains_key(n) {
                 self.agregar(error(
                     format!("`{n}` ya tiene un valor: cada nombre se usa una sola vez"),
                     nombre.rango.clone(),
@@ -743,7 +742,10 @@ impl<'a> Elaborador<'a> {
                         entrada.texto, c.nombre.texto
                     )
                 } else {
-                    format!("`{}` no tiene la entrada `{}`", c.nombre.texto, entrada.texto)
+                    format!(
+                        "`{}` no tiene la entrada `{}`",
+                        c.nombre.texto, entrada.texto
+                    )
                 };
                 return Err(error(mensaje, entrada.rango.clone()));
             };
@@ -875,7 +877,13 @@ impl<'a> Elaborador<'a> {
 
     /// Copia `c` dentro de `padre`. Lo que se copia de una instancia del
     /// principal (con sus instancias internas) se dibuja dentro de su caja.
-    fn copiar(&mut self, padre: usize, nombre: String, c: &'a Circuito, entradas: Vec<Ref>) -> usize {
+    fn copiar(
+        &mut self,
+        padre: usize,
+        nombre: String,
+        c: &'a Circuito,
+        entradas: Vec<Ref>,
+    ) -> usize {
         let arriba = padre == 0;
         let g = self.instancias.len();
         if arriba {
@@ -883,7 +891,10 @@ impl<'a> Elaborador<'a> {
             self.instancias.push(Caja {
                 nombre,
                 circuito: c.nombre.texto.clone(),
-                entradas: bits_de(&c.entradas).into_iter().zip(entradas.clone()).collect(),
+                entradas: bits_de(&c.entradas)
+                    .into_iter()
+                    .zip(entradas.clone())
+                    .collect(),
                 salidas: Vec::new(),
                 split: None,
             });
@@ -904,9 +915,7 @@ impl<'a> Elaborador<'a> {
     fn construir(&mut self, id: usize, e: &'a Expr, vars: &Variables) -> Result<Vec<Ref>, Error> {
         match e {
             Expr::Senal(a) => self.leer(id, a, vars),
-            Expr::Constante(v) => Ok(vec![Ref::Nodo(
-                self.nodo(Tipo::Constante(*v), Vec::new()),
-            )]),
+            Expr::Constante(v) => Ok(vec![Ref::Nodo(self.nodo(Tipo::Constante(*v), Vec::new()))]),
             Expr::Compuerta(c, args) => {
                 let mut partes = Vec::new();
                 for a in args {
@@ -944,7 +953,8 @@ impl<'a> Elaborador<'a> {
                 }
                 if bits.len() < 2 {
                     return Err(error(
-                        "`split.derecha` separa un bus de 2 o más bits; la señal es de 1 bit".into(),
+                        "`split.derecha` separa un bus de 2 o más bits; la señal es de 1 bit"
+                            .into(),
                         rango.clone(),
                     ));
                 }
@@ -956,13 +966,17 @@ impl<'a> Elaborador<'a> {
                 self.actual = Some(g);
                 let salidas: Vec<Ref> = bits
                     .iter()
-                    .map(|b| Ref::Nodo(self.nodo(Tipo::Compuerta(Compuerta::Buffer), vec![b.clone()])))
+                    .map(|b| {
+                        Ref::Nodo(self.nodo(Tipo::Compuerta(Compuerta::Buffer), vec![b.clone()]))
+                    })
                     .collect();
                 self.actual = None;
                 // Los pines sueltos llevan su número; el lado del bus no lleva nada
                 let n = bits.len();
                 let separa = *separa;
-                let pines = |suelto: bool| (0..n).map(move |k| if suelto { k.to_string() } else { String::new() });
+                let pines = |suelto: bool| {
+                    (0..n).map(move |k| if suelto { k.to_string() } else { String::new() })
+                };
                 self.instancias.push(Caja {
                     // ponytail: se ubica por orden; si cambia el código puede saltar de lugar
                     nombre: format!("split{g}"),
@@ -1175,7 +1189,9 @@ mod tests {
             .collect();
         assert_eq!(
             nombres,
-            ["A[0]", "A[1]", "A[2]", "A[3]", "B[0]", "B[1]", "B[2]", "B[3]", "E"]
+            [
+                "A[0]", "A[1]", "A[2]", "A[3]", "B[0]", "B[1]", "B[2]", "B[3]", "E"
+            ]
         );
         // 9 entradas, 4 + 4 compuertas, 2 buffers del split, 10 salidas
         assert_eq!(red.nodos.len(), 9 + 8 + 2 + 10);
@@ -1189,10 +1205,17 @@ mod tests {
         assert_eq!(caja.salidas, [(String::new(), 17), (String::new(), 18)]);
         assert_eq!(red.nodos[17].nombre, "Z[0]");
         assert_eq!(red.nodos[17].instancia, Some(0));
-        let z1 = red.nodos.iter().find(|n| n.nombre == "Z[1]" && n.instancia.is_none()).unwrap();
+        let z1 = red
+            .nodos
+            .iter()
+            .find(|n| n.nombre == "Z[1]" && n.instancia.is_none())
+            .unwrap();
         assert_eq!(z1.entradas, [18]);
         // Separar: entra el bus por un pin, salen los bits numerados
-        let red = compilar("circuit S { in A[2]; out a0, a1; a = split.derecha(A); a0 = a[0]; a1 = a[1]; }").unwrap();
+        let red = compilar(
+            "circuit S { in A[2]; out a0, a1; a = split.derecha(A); a0 = a[0]; a1 = a[1]; }",
+        )
+        .unwrap();
         assert_eq!(red.instancias[0].split, Some(super::Split::Separa));
         assert_eq!(red.instancias[0].salidas[1].0, "1");
     }
@@ -1225,7 +1248,9 @@ mod tests {
 
         assert_eq!(
             errores("main { in A[4], B[2]; out X[4]; X = and(A, B); }"),
-            ["las entradas de `and` deben tener el mismo ancho (o 1 bit): hay de 4 bits y de 2 bits"]
+            [
+                "las entradas de `and` deben tener el mismo ancho (o 1 bit): hay de 4 bits y de 2 bits"
+            ]
         );
         assert_eq!(
             errores("main { in A[4]; out X; X = A; }"),

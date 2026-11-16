@@ -288,7 +288,10 @@ impl Parser<'_> {
         self.esperar(Tipo::LlaveAbre, "`{`")?;
         let mut cuerpo = Vec::new();
         while !self.tomar(Tipo::LlaveCierra) {
-            if matches!(self.actual().tipo, Tipo::Reservada(Reservada::In | Reservada::Out)) {
+            if matches!(
+                self.actual().tipo,
+                Tipo::Reservada(Reservada::In | Reservada::Out)
+            ) {
                 return Err(Error {
                     mensaje: "`in` y `out` no van dentro de un `for`".into(),
                     rango: self.actual().rango.clone(),
@@ -310,7 +313,10 @@ impl Parser<'_> {
             Ok(())
         } else {
             Err(Error {
-                mensaje: format!("el `for` usa `{}`: aquí va `{}`", variable.texto, variable.texto),
+                mensaje: format!(
+                    "el `for` usa `{}`: aquí va `{}`",
+                    variable.texto, variable.texto
+                ),
                 rango: n.rango,
             })
         }
@@ -453,7 +459,8 @@ impl Parser<'_> {
                 }
                 if !separa && partes.len() < 2 {
                     return Err(Error {
-                        mensaje: "`split.izquierda` junta 2 o más señales: `split.izquierda(a, b)`".into(),
+                        mensaje: "`split.izquierda` junta 2 o más señales: `split.izquierda(a, b)`"
+                            .into(),
                         rango,
                     });
                 }
@@ -558,8 +565,13 @@ mod tests {
         .unwrap()[0];
         assert_eq!(c.entradas[0].ancho, Some(8));
         assert_eq!(c.entradas[1].ancho, None);
-        assert!(matches!(&c.sentencias[0], Sentencia::Arreglo { nombre, .. } if nombre.texto == "fa"));
-        let Sentencia::For { variable, cuerpo, .. } = &c.sentencias[1] else {
+        assert!(
+            matches!(&c.sentencias[0], Sentencia::Arreglo { nombre, .. } if nombre.texto == "fa")
+        );
+        let Sentencia::For {
+            variable, cuerpo, ..
+        } = &c.sentencias[1]
+        else {
             panic!("se esperaba un for");
         };
         assert_eq!(variable.texto, "i");

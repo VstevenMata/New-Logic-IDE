@@ -1522,7 +1522,13 @@ fn dibujar(
                 };
                 for (k, (nombre, _)) in pines.iter().enumerate() {
                     let y = altura_pin(r, k, pines.len());
-                    p.text(pos2(x, y - 1.0), alinear, nombre, FontId::monospace(9.0), c.tenue);
+                    p.text(
+                        pos2(x, y - 1.0),
+                        alinear,
+                        nombre,
+                        FontId::monospace(9.0),
+                        c.tenue,
+                    );
                 }
                 continue;
             }
