@@ -36,6 +36,31 @@ circuit SumadorCompleto {
 ",
 );
 
+const SUMADOR_4_BITS: (&str, &str) = (
+    "Sumador4.SA",
+    "// Sumador de 4 bits con buses: A[4] + B[4].
+// Un arreglo de 4 SumadorCompleto y un for que los conecta;
+// el acarreo de cada bit entra al siguiente.
+circuit Sumador4 {
+    in A[4], B[4];
+    out S[4], Cout;
+
+    SumadorCompleto b[4];
+
+    for (i = 0; i < 4; i++) {
+        b[i].A = A[i];
+        b[i].B = B[i];
+        S[i]   = b[i].S;
+    }
+    b[0].Cin = 0;
+    for (i = 1; i < 4; i++) {
+        b[i].Cin = b[i-1].Cout;
+    }
+    Cout = b[3].Cout;
+}
+",
+);
+
 const SUMADOR_2_BITS: (&str, &str) = (
     "Sumador2.SA",
     "// Sumador de 2 bits: A1 A0 + B1 B0.
@@ -208,6 +233,10 @@ pub const EJEMPLOS: &[(&str, &[(&str, &str)])] = &[
         "Sumador de 2 bits",
         &[MEDIO_SUMADOR, SUMADOR_COMPLETO, SUMADOR_2_BITS],
     ),
+    (
+        "Sumador de 4 bits (buses y for)",
+        &[MEDIO_SUMADOR, SUMADOR_COMPLETO, SUMADOR_4_BITS],
+    ),
     ("Medio restador", &[MEDIO_RESTADOR]),
     ("Multiplexor 2 a 1", &[MUX2]),
     ("Multiplexor 4 a 1", &[MUX2, MUX4]),
@@ -298,6 +327,44 @@ pub fn guia(ui: &mut egui::Ui) {
     ui.label(
         "Se simula el archivo abierto: su `main`, o si no tiene, el último circuito \
          del archivo que ningún otro usa.",
+    );
+
+    seccion(ui, "Buses");
+    ui.label(
+        "Un bus junta varios bits con un solo nombre. Se elige un bit con [i] y un \
+         tramo con [a..b]:",
+    );
+    codigo(
+        ui,
+        "in A[4], B[4];       // buses de 4 bits: A[0] ... A[3]\n\
+         X = and(A, B);       // compuertas bit a bit: 4 AND\n\
+         Y = and(A, E);       // un bit suelto se repite: A[i] AND E\n\
+         a = A[0..1];         // tramo de 2 bits",
+    );
+
+    seccion(ui, "Split");
+    ui.label(
+        "Es un componente, como and. El lado dice hacia dónde van los pines sueltos: \
+         .derecha separa un bus (los pines salen por la derecha) y .izquierda junta \
+         señales en un bus (los pines entran por la izquierda). El primer pin es el bit 0:",
+    );
+    codigo(
+        ui,
+        "a = split.derecha(A);           // 1 entrada (A[3]) → 3 salidas: a[0], a[1], a[2]\n\
+         B = split.izquierda(x, y, z);   // 3 entradas → 1 salida (B[3], B[0] = x)",
+    );
+
+    seccion(ui, "Repetir con for");
+    ui.label(
+        "`Circuito nombre[n];` crea n copias; sus entradas se conectan con \
+         nombre[i].Entrada = .... El for repite sentencias al compilar (no durante la \
+         simulación) y su variable solo se usa en los índices:",
+    );
+    codigo(
+        ui,
+        "SumadorCompleto b[4];\n\
+         for (i = 0; i < 4; i++) {\n    b[i].A = A[i];\n    S[i]   = b[i].S;\n}\n\
+         for (i = 1; i < 4; i++) {\n    b[i].Cin = b[i-1].Cout;\n}",
     );
 
     seccion(ui, "Proyecto");

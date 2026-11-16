@@ -8,7 +8,7 @@ pub mod parser;
 pub use compuerta::Compuerta;
 pub use netlist::Netlist;
 
-use parser::{Circuito, Expr};
+use parser::Circuito;
 use std::collections::HashSet;
 
 /// Un error del compilador, con su posición en bytes dentro del código.
@@ -49,14 +49,7 @@ pub fn principal(circuitos: &[Circuito]) -> Option<&Circuito> {
     if let Some(c) = circuitos.iter().find(|c| c.nombre.texto == "main") {
         return Some(c);
     }
-    let usados: HashSet<&str> = circuitos
-        .iter()
-        .flat_map(|c| &c.asignaciones)
-        .filter_map(|(_, e)| match e {
-            Expr::Instancia(n, _) => Some(n.texto.as_str()),
-            _ => None,
-        })
-        .collect();
+    let usados: HashSet<&str> = circuitos.iter().flat_map(|c| c.usados()).collect();
     circuitos
         .iter()
         .rev()
