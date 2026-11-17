@@ -4,7 +4,7 @@
 //! El código se compila en cada cambio y el lienzo dibuja el circuito al instante.
 
 use crate::ayuda;
-use crate::proyecto::{Posiciones, Proyecto, es_sa};
+use crate::proyecto::{Posiciones, Problema, Proyecto, es_sa};
 use eframe::egui::{
     self, Align2, Color32, CornerRadius, FontId, Frame, Margin, Pos2, Rect, RichText, Sense, Shape,
     Stroke, StrokeKind, Theme, Vec2, pos2, vec2,
@@ -33,6 +33,13 @@ struct Paleta {
     puntos: Color32,
     /// Cables y LEDs en 1 (en 0 usan `tenue`)
     uno: Color32,
+    /// Colores del código: estructura (`circuit`, `in`…), componentes (`and`, `split`…),
+    /// números y textos, comentarios y lo que el lexer no entiende
+    clave: Color32,
+    componente: Color32,
+    numero: Color32,
+    comentario: Color32,
+    error: Color32,
 }
 
 const CLARO: Paleta = Paleta {
@@ -51,6 +58,12 @@ const CLARO: Paleta = Paleta {
     // rgba(67, 76, 69, 0.075)
     puntos: Color32::from_rgba_premultiplied(5, 6, 5, 19),
     uno: Color32::from_rgb(0x4f, 0xa5, 0x60),
+    // Colores de lirios: lila, rosa, lirio tigre (naranja) y tallo (verde)
+    clave: Color32::from_rgb(0x86, 0x58, 0xc0),
+    componente: Color32::from_rgb(0xc2, 0x4f, 0x80),
+    numero: Color32::from_rgb(0xc8, 0x6e, 0x1e),
+    comentario: Color32::from_rgb(0x7d, 0x98, 0x74),
+    error: Color32::from_rgb(0xc4, 0x3d, 0x33),
 };
 
 // Gris verdoso (no negro puro) para que el pastel siga combinando
@@ -70,6 +83,11 @@ const OSCURO: Paleta = Paleta {
     // rgba(255, 255, 255, 0.06)
     puntos: Color32::from_rgba_premultiplied(15, 15, 15, 15),
     uno: Color32::from_rgb(0x7c, 0xc9, 0x8b),
+    clave: Color32::from_rgb(0xc9, 0xa8, 0xf0),
+    componente: Color32::from_rgb(0xf0, 0xa0, 0xc4),
+    numero: Color32::from_rgb(0xf2, 0xb4, 0x7a),
+    comentario: Color32::from_rgb(0x84, 0x9c, 0x7e),
+    error: Color32::from_rgb(0xf0, 0x7c, 0x70),
 };
 
 /// La paleta del tema activo
@@ -159,7 +177,7 @@ pub struct Interfaz {
     recientes: Vec<PathBuf>,
     /// Último circuito que compiló; se queda mientras el código tiene errores.
     red: Option<Netlist>,
-    problemas: Vec<String>,
+    problemas: Vec<Problema>,
     /// Valor de cada `in`, en orden
     entradas: Vec<bool>,
     /// Valor de cada nodo de `red` (guarda la memoria de los flip-flops)
@@ -524,7 +542,10 @@ impl Interfaz {
                 self.mover(false);
             }
         }
-        if tecla(ctrl, Key::B) {
+        // Primero la versión con Alt, como con Shift en Ctrl+S
+        if tecla(ctrl | Modifiers::ALT, Key::B) {
+            self.ver_senales = !self.ver_senales;
+        } else if tecla(ctrl, Key::B) {
             self.ver_proyecto = !self.ver_proyecto;
         }
         if tecla(ctrl, Key::J) {
@@ -676,20 +697,31 @@ impl Interfaz {
             Ventana::Actualizar => "Buscar actualizaciones",
             Ventana::Acerca => "Acerca de LogicSM",
         };
-        let mut abierta = true;
-        egui::Window::new(titulo)
-            .open(&mut abierta)
-            .collapsible(false)
-            .default_size([560.0, 520.0])
-            .show(ctx, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| match ventana {
+        // Modal: centrada, dentro de la app, y no deja tocar nada más hasta cerrarla
+        // (con ×, Esc o un click afuera)
+        let mut cerrar = false;
+        let r = egui::Modal::new(egui::Id::unique("ventana_ayuda")).show(ctx, |ui| {
+            ui.set_width(560.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(titulo).size(15.0).strong());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    cerrar = ui
+                        .add(egui::Button::new(RichText::new("×").size(18.0)).frame(false))
+                        .on_hover_text("Cerrar (Esc)")
+                        .clicked();
+                });
+            });
+            ui.separator();
+            egui::ScrollArea::vertical()
+                .max_height(480.0)
+                .show(ui, |ui| match ventana {
                     Ventana::Guia => ayuda::guia(ui),
                     Ventana::Atajos => ayuda::atajos(ui),
                     Ventana::Actualizar => ayuda::actualizar(ui),
                     Ventana::Acerca => ayuda::acerca(ui, &self.logo),
                 });
-            });
-        if !abierta {
+        });
+        if cerrar || r.should_close() {
             self.ventana = None;
         }
     }
@@ -734,37 +766,52 @@ impl eframe::App for Interfaz {
             self.confirmacion(&ctx);
             return;
         }
-        if self.ver_proyecto {
-            egui::Panel::left("proyecto")
-                .exact_size(190.0)
-                .resizable(false)
-                .frame(
-                    Frame::new()
-                        .fill(c.panel)
-                        .inner_margin(Margin::symmetric(14, 15)),
-                )
-                .show(ui, |ui| self.panel_proyecto(ui));
-        }
-        if self.ver_senales {
-            egui::Panel::right("senales")
-                .exact_size(222.0)
-                .resizable(false)
-                .frame(
-                    Frame::new()
-                        .fill(c.panel)
-                        .inner_margin(Margin::symmetric(14, 15)),
-                )
-                .show(ui, |ui| self.senales(ui));
-        }
-        if self.ver_inferior {
-            egui::Panel::bottom("pestanas")
-                .exact_size(166.0)
-                .resizable(false)
-                .frame(Frame::new().fill(c.panel))
-                .show(ui, |ui| self.pestanas(ui));
-        }
+        // Arrastrar el borde por debajo del mínimo oculta el panel; arrastrarlo de nuevo lo abre.
+        // `take_available_space`: sin él egui achica el panel a su contenido y no se puede agrandar
+        let (mut ver_proyecto, mut ver_senales, mut ver_inferior) =
+            (self.ver_proyecto, self.ver_senales, self.ver_inferior);
+        // El panel de abajo puede llegar hasta el 70 % del alto de la ventana
+        let alto_inferior = (ui.available_height() * 0.7).max(200.0);
+        egui::Panel::left("proyecto")
+            .default_size(190.0)
+            .size_range(150.0..=420.0)
+            .resizable(true)
+            .frame(
+                Frame::new()
+                    .fill(c.panel)
+                    .inner_margin(Margin::symmetric(14, 15)),
+            )
+            .show_collapsible(ui, &mut ver_proyecto, |ui| {
+                self.panel_proyecto(ui);
+                ui.take_available_space();
+            });
+        egui::Panel::right("senales")
+            .default_size(222.0)
+            .size_range(170.0..=640.0)
+            .resizable(true)
+            .frame(
+                Frame::new()
+                    .fill(c.panel)
+                    .inner_margin(Margin::symmetric(14, 15)),
+            )
+            .show_collapsible(ui, &mut ver_senales, |ui| {
+                self.senales(ui);
+                ui.take_available_space();
+            });
+        egui::Panel::bottom("pestanas")
+            .default_size(166.0)
+            .size_range(90.0..=alto_inferior)
+            .resizable(true)
+            .frame(Frame::new().fill(c.panel))
+            .show_collapsible(ui, &mut ver_inferior, |ui| {
+                self.pestanas(ui);
+                ui.take_available_space();
+            });
+        (self.ver_proyecto, self.ver_senales, self.ver_inferior) =
+            (ver_proyecto, ver_senales, ver_inferior);
         egui::Panel::left("codigo")
             .default_size(420.0)
+            .size_range(260.0..=900.0)
             .resizable(true)
             .frame(Frame::new().fill(c.codigo))
             .show(ui, |ui| self.editor(ui));
@@ -788,7 +835,7 @@ type Exportado = Result<String, String>;
 const MAX_ENTRADAS_CSV: usize = 16;
 
 impl Interfaz {
-    /// Menú Archivo → Exportar y botón Exportar de Proyecto
+    /// Menú Archivo → Exportar
     fn exportar(&mut self, ui: &mut egui::Ui) {
         let libre = self.cola_png.is_empty();
         for formato in Formato::TODOS {
@@ -1067,6 +1114,32 @@ impl Interfaz {
                 if boton(ui, texto, icono, false).clicked() {
                     ui.ctx().set_theme(otro);
                 }
+                ui.add_space(6.0);
+                // De derecha a izquierda: quedan en el orden del dibujo (izquierdo, abajo, derecho)
+                if boton_panel(
+                    ui,
+                    self.ver_senales,
+                    Lado::Derecha,
+                    "Entradas y salidas (Ctrl+Alt+B)",
+                ) {
+                    self.ver_senales = !self.ver_senales;
+                }
+                if boton_panel(
+                    ui,
+                    self.ver_inferior,
+                    Lado::Abajo,
+                    "Panel inferior (Ctrl+J)",
+                ) {
+                    self.ver_inferior = !self.ver_inferior;
+                }
+                if boton_panel(
+                    ui,
+                    self.ver_proyecto,
+                    Lado::Izquierda,
+                    "Panel de proyecto (Ctrl+B)",
+                ) {
+                    self.ver_proyecto = !self.ver_proyecto;
+                }
             });
         });
     }
@@ -1161,7 +1234,7 @@ impl Interfaz {
             }
             ui.separator();
             ui.checkbox(&mut self.ver_proyecto, "Panel de proyecto  (Ctrl+B)");
-            ui.checkbox(&mut self.ver_senales, "Entradas y salidas");
+            ui.checkbox(&mut self.ver_senales, "Entradas y salidas  (Ctrl+Alt+B)");
             ui.checkbox(&mut self.ver_inferior, "Panel inferior  (Ctrl+J)");
         });
         ui.menu_button("Simulación", |ui| {
@@ -1218,40 +1291,7 @@ impl Interfaz {
     }
 
     fn panel_proyecto(&mut self, ui: &mut egui::Ui) {
-        let ctx = ui.ctx().clone();
         titulo(ui, "Proyecto");
-        let ancho = (ui.available_width() - ui.spacing().item_spacing.x) / 2.0;
-        let accion = |ui: &mut egui::Ui, texto: &str| {
-            ui.add(egui::Button::new(RichText::new(texto).size(12.0)).min_size(vec2(ancho, 28.0)))
-        };
-        ui.horizontal(|ui| {
-            if accion(ui, "Nuevo")
-                .on_hover_text("Nuevo proyecto (Ctrl+N)")
-                .clicked()
-            {
-                self.pedir(&ctx, Accion::Nuevo);
-            }
-            if accion(ui, "Abrir")
-                .on_hover_text("Abrir un proyecto .SA (Ctrl+O)")
-                .clicked()
-            {
-                self.pedir(&ctx, Accion::Abrir);
-            }
-        });
-        ui.horizontal(|ui| {
-            if accion(ui, "Guardar")
-                .on_hover_text("Guardar todos los archivos (Ctrl+S)")
-                .clicked()
-            {
-                self.guardar(false);
-            }
-            // Espacios al final: el texto se corre a la izquierda y deja lugar a la flecha
-            let exportar = accion(ui, "Exportar    ");
-            flecha_abajo(ui, &exportar);
-            egui::Popup::menu(&exportar).show(|ui| self.exportar(ui));
-        });
-        ui.add_space(14.0);
-
         // Carpeta y botón para crear archivos
         let marca = if self.proyecto.sin_guardar() {
             " •"
@@ -1476,6 +1516,59 @@ fn flecha_abajo(ui: &egui::Ui, boton: &egui::Response) {
     ));
 }
 
+/// Línea ondulada de `x0` a `x1` a la altura `y`, como la de los correctores
+fn zigzag(p: &egui::Painter, x0: f32, x1: f32, y: f32, color: Color32) {
+    let paso = 2.0;
+    let puntos = (0..=((x1 - x0) / paso).ceil() as usize)
+        .map(|i| {
+            let x = (x0 + i as f32 * paso).min(x1);
+            pos2(x, if i % 2 == 0 { y } else { y - 2.0 })
+        })
+        .collect();
+    p.add(Shape::line(puntos, Stroke::new(1.0, color)));
+}
+
+/// El código con un color por tipo de token, para el editor
+fn colorear(codigo: &str, fuente: &FontId, c: &Paleta) -> egui::text::LayoutJob {
+    use logicsm_core::lexer::{Reservada as R, Tipo as T, resaltar};
+    let (tokens, errores) = resaltar(codigo);
+    let mut tramos: Vec<(std::ops::Range<usize>, Color32)> = tokens
+        .iter()
+        .map(|t| {
+            let color = match &t.tipo {
+                T::Reservada(R::Circuit | R::Main | R::For | R::In | R::Out) => c.clave,
+                T::Reservada(_) => c.componente,
+                T::Entero(_) | T::Texto(_) => c.numero,
+                T::Comentario => c.comentario,
+                T::Ident(_) => c.tinta,
+                _ => c.tenue,
+            };
+            (t.rango.clone(), color)
+        })
+        .chain(errores.iter().map(|e| (e.rango.clone(), c.error)))
+        .collect();
+    // Estable: un comentario sin cerrar es token y error a la vez, y gana el token
+    tramos.sort_by_key(|(r, _)| r.start);
+
+    let mut trabajo = egui::text::LayoutJob::default();
+    let mut agregar = |desde: usize, hasta: usize, color| {
+        let formato = egui::TextFormat::simple(fuente.clone(), color);
+        trabajo.append(&codigo[desde..hasta], 0.0, formato);
+    };
+    let mut fin = 0;
+    for (r, color) in tramos {
+        if r.start < fin {
+            continue;
+        }
+        // Espacios y saltos de línea entre tokens
+        agregar(fin, r.start, c.tinta);
+        agregar(r.start, r.end, color);
+        fin = r.end;
+    }
+    agregar(fin, codigo.len(), c.tinta);
+    trabajo
+}
+
 /// Título de sección ("Proyecto", "Entradas"…)
 fn titulo(ui: &mut egui::Ui, texto: &str) {
     ui.label(RichText::new(texto).size(12.0).strong());
@@ -1542,32 +1635,104 @@ impl Interfaz {
             let alto = ui.text_style_height(&egui::TextStyle::Monospace);
             area = area.vertical_scroll_offset((linea as f32 - 4.0).max(0.0) * alto);
         }
+        let c = paleta(ui);
+        let fuente = egui::TextStyle::Monospace.resolve(ui.style());
+        // ponytail: colorea todo el archivo en cada cuadro; guardar el resultado si un archivo largo se pone lento
+        let mut colores = |ui: &egui::Ui, texto: &dyn egui::TextBuffer, ancho: f32| {
+            let mut trabajo = colorear(texto.as_str(), &fuente, c);
+            trabajo.wrap.max_width = ancho;
+            ui.painter().layout_job(trabajo)
+        };
         area.show(ui, |ui| {
-            let r = ui.add(
-                egui::TextEdit::multiline(&mut self.proyecto.actual_mut().codigo)
+            ui.horizontal_top(|ui| {
+                // Columna de números de línea: se llena después, con las filas del texto
+                let lineas = self.proyecto.actual().codigo.matches('\n').count() + 1;
+                let digito = ui
+                    .painter()
+                    .layout_no_wrap("0".into(), fuente.clone(), c.tenue)
+                    .size()
+                    .x;
+                let ancho = lineas.to_string().len().max(2) as f32 * digito + 6.0;
+                let (numeros, _) = ui.allocate_exact_size(vec2(ancho, 0.0), Sense::hover());
+
+                let salida = egui::TextEdit::multiline(&mut self.proyecto.actual_mut().codigo)
                     .id(id)
                     .code_editor()
+                    .frame(Frame::new())
                     .desired_width(f32::INFINITY)
-                    .desired_rows(40),
-            );
-            if r.changed() {
-                self.ultimo_lienzo = false;
-                self.compilar();
-            }
+                    .desired_rows(40)
+                    .layouter(&mut colores)
+                    .show(ui);
+                if salida.response.changed() {
+                    self.ultimo_lienzo = false;
+                    self.compilar();
+                }
+
+                // La línea del cursor va más fuerte. Una línea larga ocupa varias filas
+                // (se parte al ancho del editor): el número va en la primera.
+                let cursor = salida.cursor_range.map(|r| {
+                    let codigo = &self.proyecto.actual().codigo;
+                    codigo
+                        .chars()
+                        .take(r.primary.index.into())
+                        .filter(|&ch| ch == '\n')
+                        .count()
+                        + 1
+                });
+                let mut linea = 1;
+                let mut empieza = true;
+                for fila in &salida.galley.rows {
+                    if empieza {
+                        let color = if cursor == Some(linea) {
+                            c.tinta
+                        } else {
+                            c.tenue
+                        };
+                        ui.painter().text(
+                            pos2(numeros.right(), salida.galley_pos.y + fila.pos.y),
+                            Align2::RIGHT_TOP,
+                            linea.to_string(),
+                            fuente.clone(),
+                            color,
+                        );
+                    }
+                    empieza = fila.ends_with_newline;
+                    linea += fila.ends_with_newline as usize;
+                }
+
+                // Subrayado en zigzag bajo cada error de este archivo
+                let actual = self.proyecto.actual();
+                for (archivo, rango) in self.problemas.iter().filter_map(|p| p.lugar.as_ref()) {
+                    if *archivo != actual.nombre {
+                        continue;
+                    }
+                    let caracter = |byte: usize| {
+                        let antes = actual.codigo.get(..byte).unwrap_or(&actual.codigo);
+                        egui::text::CCursor::new(antes.chars().count())
+                    };
+                    let desde = salida.galley.pos_from_cursor(caracter(rango.start));
+                    let hasta = salida.galley.pos_from_cursor(caracter(rango.end));
+                    // Sin ancho (fin del archivo) o partido en dos filas: un carácter
+                    let fin = if hasta.top() == desde.top() && hasta.left() > desde.left() {
+                        hasta.left()
+                    } else {
+                        desde.left() + digito
+                    };
+                    let origen = salida.galley_pos.to_vec2();
+                    zigzag(
+                        ui.painter(),
+                        desde.left() + origen.x,
+                        fin + origen.x,
+                        desde.bottom() + origen.y,
+                        c.error,
+                    );
+                }
+            });
         });
     }
 
-    /// "Mux4, línea 3: …" → abre ese archivo con el cursor en esa línea
-    fn ir_al_problema(&mut self, problema: &str) {
-        let Some((archivo, resto)) = problema.split_once(", línea ") else {
-            return;
-        };
-        let Some(linea) = resto
-            .split_once(':')
-            .and_then(|(n, _)| n.parse::<usize>().ok())
-        else {
-            return;
-        };
+    /// Click en Problemas: abre ese archivo con el cursor donde está el error
+    fn ir_al_problema(&mut self, archivo: &str, byte: usize) {
         let Some(i) = self
             .proyecto
             .archivos
@@ -1579,21 +1744,18 @@ impl Interfaz {
         if i != self.proyecto.activo {
             self.abrir_archivo(i);
         }
-        let caracter = self
-            .proyecto
-            .actual()
-            .codigo
-            .split_inclusive('\n')
-            .take(linea.saturating_sub(1))
-            .map(|l| l.chars().count())
-            .sum();
-        self.ir_a = Some((caracter, linea));
+        let codigo = &self.proyecto.actual().codigo;
+        let antes = codigo.get(..byte).unwrap_or(codigo);
+        let linea = antes.matches('\n').count() + 1;
+        self.ir_a = Some((antes.chars().count(), linea));
     }
 
     fn lienzo(&mut self, ui: &mut egui::Ui) {
         let c = paleta(ui);
         cabecera(ui, "Circuito");
-        let afuera = ui.available_rect_before_wrap();
+        // Un margen sin el lienzo alrededor: si no, arrastrar el fondo (mover la vista)
+        // le gana al borde de los paneles vecinos y no se pueden agrandar
+        let afuera = ui.available_rect_before_wrap().shrink(12.0);
         self.rect_lienzo = afuera;
         let Some(red) = &self.red else {
             ui.painter().text(
@@ -1609,11 +1771,15 @@ impl Interfaz {
         // Arrastrar el fondo o la rueda mueven la vista; Ctrl + rueda acerca y aleja
         let archivo = self.proyecto.actual().nombre.clone();
         let posiciones = self.proyecto.posiciones.entry(archivo).or_default();
-        let dibujo = egui::Scene::new()
-            .zoom_range(0.2..=3.0)
-            .show(ui, &mut self.vista, |ui| {
-                puntos(ui);
-                dibujar(ui, red, &self.valores, &mut self.entradas, posiciones)
+        let dibujo = ui
+            .scope_builder(egui::UiBuilder::new().max_rect(afuera), |ui| {
+                egui::Scene::new()
+                    .zoom_range(0.2..=3.0)
+                    .show(ui, &mut self.vista, |ui| {
+                        puntos(ui);
+                        dibujar(ui, red, &self.valores, &mut self.entradas, posiciones)
+                    })
+                    .inner
             })
             .inner;
         if let Some(antes) = dibujo.antes {
@@ -1689,7 +1855,9 @@ impl Interfaz {
         );
         let mut problemas = self.problemas.clone();
         if !self.estable {
-            problemas.push("El circuito oscila: nunca llega a un valor estable.".into());
+            problemas.push(Problema::sin_lugar(
+                "El circuito oscila: nunca llega a un valor estable.".into(),
+            ));
         }
         let titulo_problemas = match problemas.len() {
             0 => "Problemas".to_string(),
@@ -1737,12 +1905,14 @@ impl Interfaz {
                             vacio(ui, "Sin problemas.");
                         }
                         for problema in &problemas {
-                            let r = ui.add(
-                                egui::Label::new(RichText::new(problema).size(12.0).monospace())
-                                    .sense(Sense::click()),
-                            );
+                            let texto = RichText::new(&problema.texto).size(12.0).monospace();
+                            let Some(lugar) = &problema.lugar else {
+                                ui.label(texto);
+                                continue;
+                            };
+                            let r = ui.add(egui::Label::new(texto).sense(Sense::click()));
                             if r.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
-                                ir_a = Some(problema.clone());
+                                ir_a = Some(lugar.clone());
                             }
                         }
                     }
@@ -1759,8 +1929,8 @@ impl Interfaz {
                 });
             });
         });
-        if let Some(problema) = ir_a {
-            self.ir_al_problema(&problema);
+        if let Some((archivo, rango)) = ir_a {
+            self.ir_al_problema(&archivo, rango.start);
         }
     }
 
@@ -2406,6 +2576,40 @@ fn cabecera(ui: &mut egui::Ui, texto: &str) {
         FontId::proportional(12.0),
         c.tinta,
     );
+}
+
+enum Lado {
+    Izquierda,
+    Abajo,
+    Derecha,
+}
+
+/// Muestra u oculta un panel. Dibuja la ventana con ese panel marcado, como en VS Code:
+/// relleno si se ve, solo el borde si está oculto.
+fn boton_panel(ui: &mut egui::Ui, visible: bool, lado: Lado, ayuda: &str) -> bool {
+    let c = paleta(ui);
+    let (rect, r) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::click());
+    let p = ui.painter();
+    if r.hovered() {
+        p.rect_filled(rect, 5.0, c.suave);
+    }
+    let color = if visible { c.tinta } else { c.tenue };
+    let trazo = Stroke::new(1.2, color);
+    let marco = Rect::from_center_size(rect.center(), vec2(16.0, 12.0));
+    let parte = match lado {
+        Lado::Izquierda => Rect::from_min_max(marco.min, pos2(marco.left() + 5.0, marco.bottom())),
+        Lado::Abajo => Rect::from_min_max(pos2(marco.left(), marco.bottom() - 4.0), marco.max),
+        Lado::Derecha => Rect::from_min_max(pos2(marco.right() - 5.0, marco.top()), marco.max),
+    };
+    if visible {
+        p.rect_filled(parte, 0.0, color);
+    } else {
+        p.rect_stroke(parte, 0.0, trazo, StrokeKind::Inside);
+    }
+    p.rect_stroke(marco, 2.0, trazo, StrokeKind::Inside);
+    r.on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(ayuda)
+        .clicked()
 }
 
 #[derive(Clone, Copy)]
