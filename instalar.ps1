@@ -107,8 +107,11 @@ function Instalar {
     $lnk.Save()
     Ok 'Acceso agregado al menú Inicio'
 
-    # El ícono es opcional: si no se puede bajar, los .SA quedan con el genérico
-    $ico = Join-Path $Raiz 'archivo.ico'
+    # El ícono es opcional: si no se puede bajar, los .SA quedan con el genérico.
+    # Va en la carpeta de datos (la borra la desinstalación), no junto al .exe; se quita la copia de versiones viejas
+    Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $Raiz 'archivo.ico')
+    [void](New-Item -ItemType Directory -Force "$env:LOCALAPPDATA\LogicSM")
+    $ico = "$env:LOCALAPPDATA\LogicSM\archivo.ico"
     try { Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/$Repo/$Version/assets/archivo.ico" -OutFile $ico } catch {}
     [void](New-Item -Force "$Clases\.SA" -Value $TipoSA)
     [void](New-Item -Force "$Clases\$TipoSA" -Value "Proyecto de $Nombre")
