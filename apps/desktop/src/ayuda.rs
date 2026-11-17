@@ -403,7 +403,9 @@ pub fn guia(ui: &mut egui::Ui) {
         "Mueve el lienzo arrastrando el fondo o con la rueda; Ctrl + rueda acerca y aleja.",
         "Pasa el mouse sobre una pieza para ver su nombre. Cada circuito propio se ve como una caja.",
         "Los errores aparecen en la pestaña Problemas; con un click vas a su línea.",
-        "Arrastra un archivo .SA a la ventana para abrirlo.",
+        "Arrastra un archivo .SA a la ventana para abrirlo; con un proyecto abierto, se agrega \
+         y su circuito se declara en el archivo abierto.",
+        "Arrastra un archivo de la lista Proyecto al código o al circuito para declararlo ahí.",
         "La pestaña Tabla de verdad muestra todas las combinaciones de entradas.",
     ] {
         ui.label(format!("•  {paso}"));

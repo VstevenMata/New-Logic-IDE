@@ -221,7 +221,8 @@ pub struct Interfaz {
     elegir: Option<(Formato, Vec<bool>)>,
     /// Exportación a una carpeta donde ya hay archivos con esos nombres: se pregunta
     reemplazar: Option<(Formato, Vec<(usize, PathBuf)>)>,
-    /// Imágenes por exportar (archivo, ruta); la primera es la que se está capturando.
+    /// Imágenes por exportar (archivo, ruta; PNG o SVG según la extensión); la primera es
+    /// la que se está capturando.
     /// Mientras haya, se esconden los controles del lienzo.
     cola_png: VecDeque<(usize, PathBuf)>,
     /// Ya se pidió la captura de la primera de la cola
@@ -232,21 +233,26 @@ pub struct Interfaz {
     captura: (mpsc::Sender<Exportado>, mpsc::Receiver<Exportado>),
 }
 
+/// Un archivo de la lista que se está arrastrando (su índice)
+struct Arrastre(usize);
+
 /// Lo que se puede exportar de cada archivo
 #[derive(Clone, Copy)]
 enum Formato {
     Sa,
     Png,
+    Svg,
     Csv,
 }
 
 impl Formato {
-    const TODOS: [Formato; 3] = [Formato::Sa, Formato::Png, Formato::Csv];
+    const TODOS: [Formato; 4] = [Formato::Sa, Formato::Png, Formato::Svg, Formato::Csv];
 
     fn menu(self) -> &'static str {
         match self {
             Formato::Sa => "Archivo .SA…",
             Formato::Png => "Imagen (PNG)…",
+            Formato::Svg => "Imagen (SVG)…",
             Formato::Csv => "Tabla de verdad (CSV)…",
         }
     }
@@ -255,6 +261,7 @@ impl Formato {
         match self {
             Formato::Sa => "Exportar como archivo .SA",
             Formato::Png => "Exportar como imagen",
+            Formato::Svg => "Exportar como imagen SVG",
             Formato::Csv => "Exportar la tabla de verdad",
         }
     }
@@ -263,6 +270,7 @@ impl Formato {
         match self {
             Formato::Sa => "Circuito de LogicSM",
             Formato::Png => "Imagen PNG",
+            Formato::Svg => "Imagen SVG",
             Formato::Csv => "Tabla CSV",
         }
     }
@@ -271,6 +279,7 @@ impl Formato {
         match self {
             Formato::Sa => "SA",
             Formato::Png => "png",
+            Formato::Svg => "svg",
             Formato::Csv => "csv",
         }
     }
@@ -507,6 +516,103 @@ impl Interfaz {
         self.recompilar_desde_cero();
     }
 
+    /// Un `.SA` soltado sobre la ventana con un proyecto abierto: sus archivos se agregan
+    /// y su circuito (el del último archivo) se declara en el archivo abierto
+    fn importar(&mut self, ruta: PathBuf) {
+        if self.proyecto.ruta.as_ref() == Some(&ruta) {
+            self.aviso("Ese es el proyecto abierto.".into());
+            return;
+        }
+        let otro = match Proyecto::abrir(ruta.clone()) {
+            Ok(p) => p,
+            Err(e) => return self.aviso(format!("No se pudo abrir {}: {e}", ruta.display())),
+        };
+        let archivos: Vec<(&str, &str)> = otro
+            .archivos
+            .iter()
+            .map(|a| (a.nombre.as_str(), a.codigo.as_str()))
+            .collect();
+        let activo = self.proyecto.activo;
+        for aviso in self.proyecto.agregar(&archivos) {
+            self.aviso(aviso);
+        }
+        let nombres: Vec<&str> = archivos.iter().map(|(nombre, _)| *nombre).collect();
+        self.salida
+            .push(format!("Agregado al proyecto: {}", nombres.join(", ")));
+        // `agregar` deja abierto el último: ese es el componente
+        let componente = self.proyecto.activo;
+        self.proyecto.activo = activo;
+        self.declarar(componente);
+    }
+
+    /// Declara el circuito del archivo `i` al final del archivo abierto:
+    /// `fullAdder1 = FullAdder(A, B, Cin);`, con sus entradas como argumentos
+    fn declarar(&mut self, i: usize) {
+        let archivo = &self.proyecto.archivos[i].nombre;
+        if i == self.proyecto.activo {
+            return self.aviso(format!("{archivo} no puede usarse dentro de sí mismo."));
+        }
+        let Ok(circuitos) = logicsm_core::parser::parsear(&self.proyecto.archivos[i].codigo) else {
+            return self.aviso(format!(
+                "{archivo}: tiene errores, corrígelo antes de usarlo."
+            ));
+        };
+        let Some(c) = logicsm_core::principal(&circuitos) else {
+            return self.aviso(format!("{archivo}: no tiene ningún circuito."));
+        };
+        if c.nombre.texto == "main" {
+            return self.aviso(format!(
+                "{archivo}: es un main y no se puede usar como componente \
+                 (cámbialo a circuit {archivo})."
+            ));
+        }
+        let circuito = c.nombre.texto.clone();
+        let entradas: Vec<&str> = c.entradas.iter().map(|e| e.nombre.texto.as_str()).collect();
+        let Some(linea) =
+            insertar_declaracion(&mut self.proyecto.actual_mut().codigo, &circuito, &entradas)
+        else {
+            let actual = self.proyecto.actual().nombre.clone();
+            return self.aviso(format!(
+                "Escribe primero un circuito en {actual} para declarar {circuito} ahí."
+            ));
+        };
+        self.salida.push(format!("Declarado: {linea}"));
+        self.compilar();
+    }
+
+    /// Mientras se arrastra un archivo de la lista: su nombre junto al puntero, y si se
+    /// suelta sobre `zona` (el código o el circuito) se declara en el archivo abierto
+    fn soltar_componente(&mut self, ctx: &egui::Context, zona: Rect) {
+        let Some(arrastre) = egui::DragAndDrop::payload::<Arrastre>(ctx) else {
+            return;
+        };
+        let Some(archivo) = self.proyecto.archivos.get(arrastre.0) else {
+            return;
+        };
+        let Some(puntero) = ctx.pointer_latest_pos() else {
+            return;
+        };
+        let encima = zona.contains(puntero);
+        egui::Area::new(egui::Id::unique("arrastre"))
+            .order(egui::Order::Tooltip)
+            .interactable(false)
+            .fixed_pos(puntero + vec2(14.0, 8.0))
+            .show(ctx, |ui| {
+                Frame::popup(ui.style()).show(ui, |ui| {
+                    let texto = if encima {
+                        format!("Declarar {}", archivo.nombre)
+                    } else {
+                        archivo.nombre.clone()
+                    };
+                    ui.label(texto);
+                });
+            });
+        if encima && ctx.input(|i| i.pointer.any_released()) {
+            egui::DragAndDrop::clear_payload(ctx);
+            self.declarar(arrastre.0);
+        }
+    }
+
     /// Entradas en 0 y se borra la memoria de los flip-flops
     fn reiniciar(&mut self) {
         self.entradas.fill(false);
@@ -567,7 +673,12 @@ impl Interfaz {
         let soltado = ctx.input(|i| i.raw.dropped_files.first().map(|f| f.path().to_path_buf()));
         if let Some(ruta) = soltado {
             if ruta.is_file() && es_sa(&ruta) {
-                self.pedir(ctx, Accion::AbrirRuta(ruta));
+                // Con un proyecto abierto se agrega como componente; si no, se abre
+                if self.sin_proyecto {
+                    self.pedir(ctx, Accion::AbrirRuta(ruta));
+                } else {
+                    self.importar(ruta);
+                }
             } else {
                 self.aviso(format!("{} no es un archivo .SA.", ruta.display()));
             }
@@ -809,15 +920,20 @@ impl eframe::App for Interfaz {
             });
         (self.ver_proyecto, self.ver_senales, self.ver_inferior) =
             (ver_proyecto, ver_senales, ver_inferior);
-        egui::Panel::left("codigo")
+        let codigo = egui::Panel::left("codigo")
             .default_size(420.0)
             .size_range(260.0..=900.0)
             .resizable(true)
             .frame(Frame::new().fill(c.codigo))
-            .show(ui, |ui| self.editor(ui));
-        egui::CentralPanel::default()
+            .show(ui, |ui| self.editor(ui))
+            .response
+            .rect;
+        let lienzo = egui::CentralPanel::default()
             .frame(Frame::new().fill(c.fondo))
-            .show(ui, |ui| self.lienzo(ui));
+            .show(ui, |ui| self.lienzo(ui))
+            .response
+            .rect;
+        self.soltar_componente(&ctx, codigo.union(lienzo));
         self.ventanas(&ctx);
         self.confirmacion(&ctx);
         self.ventana_exportar(&ctx);
@@ -1031,7 +1147,7 @@ impl Interfaz {
     }
 
     fn escribir(&mut self, formato: Formato, destinos: Vec<(usize, PathBuf)>) {
-        if let Formato::Png = formato {
+        if let Formato::Png | Formato::Svg = formato {
             self.volver_a = self.proyecto.activo;
             self.cola_png = destinos.into();
             self.preparar_imagen();
@@ -1349,7 +1465,9 @@ impl Interfaz {
                     }
                     let boton = egui::Button::selectable(i == self.proyecto.activo, texto)
                         .min_size(vec2(ui.available_width(), 0.0));
-                    let r = ui.add(boton);
+                    // Arrastrarlo al código o al circuito lo declara ahí
+                    let r = ui.add(boton.sense(Sense::click_and_drag()));
+                    r.dnd_set_drag_payload(Arrastre(i));
                     if r.clicked() && i != self.proyecto.activo {
                         self.abrir_archivo(i);
                     }
@@ -1771,13 +1889,20 @@ impl Interfaz {
         // Arrastrar el fondo o la rueda mueven la vista; Ctrl + rueda acerca y aleja
         let archivo = self.proyecto.actual().nombre.clone();
         let posiciones = self.proyecto.posiciones.entry(archivo).or_default();
-        let dibujo = ui
+        // También la capa del dibujo y cuántas figuras son la cuadrícula (para el SVG)
+        let (capa, cuadricula, dibujo) = ui
             .scope_builder(egui::UiBuilder::new().max_rect(afuera), |ui| {
                 egui::Scene::new()
                     .zoom_range(0.2..=3.0)
                     .show(ui, &mut self.vista, |ui| {
                         puntos(ui);
-                        dibujar(ui, red, &self.valores, &mut self.entradas, posiciones)
+                        let capa = ui.layer_id();
+                        let cuadricula = ui
+                            .ctx()
+                            .graphics(|g| g.get(capa).map_or(0, |l| l.all_entries().len()));
+                        let dibujo =
+                            dibujar(ui, red, &self.valores, &mut self.entradas, posiciones);
+                        (capa, cuadricula, dibujo)
                     })
                     .inner
             })
@@ -1795,7 +1920,23 @@ impl Interfaz {
 
         // Exportando imágenes: se captura cuando ya se dibujó encuadrado
         if let Some((_, ruta)) = self.cola_png.front() {
-            if !self.pedida && !self.ajustar {
+            if !self.pedida && !self.ajustar && ruta.extension().is_some_and(|e| e == "svg") {
+                self.pedida = true;
+                let figuras: Vec<Shape> = ui.ctx().graphics(|g| {
+                    g.get(capa).map_or(Vec::new(), |l| {
+                        l.all_entries()
+                            .skip(cuadricula)
+                            .map(|f| f.shape.clone())
+                            .collect()
+                    })
+                });
+                let texto = svg(&figuras, dibujo.contenido.expand(20.0), c.fondo);
+                let resultado = std::fs::write(ruta, texto)
+                    .map(|()| format!("Exportado: {}", ruta.display()))
+                    .map_err(|e| format!("No se pudo exportar {}: {e}", ruta.display()));
+                let _ = self.captura.0.send(resultado);
+                ui.ctx().request_repaint();
+            } else if !self.pedida && !self.ajustar {
                 self.pedida = true;
                 capturar(
                     ui.ctx(),
@@ -1993,6 +2134,192 @@ fn capturar(ctx: &egui::Context, rect: Rect, ruta: PathBuf, envio: mpsc::Sender<
         ctx2.request_repaint();
     });
     ctx.request_repaint();
+}
+
+/// Agrega `circuito1 = Circuito(entradas);` en su propia línea antes de la última `}`
+/// de `codigo`, con un nombre que el código no use. Devuelve la línea, o `None` si no
+/// hay ningún circuito donde ponerla.
+fn insertar_declaracion(codigo: &mut String, circuito: &str, entradas: &[&str]) -> Option<String> {
+    use logicsm_core::lexer::{Tipo as Token, tokenizar};
+    let fin = codigo.rfind('}')?;
+    let usados: Vec<String> = tokenizar(codigo)
+        .0
+        .into_iter()
+        .filter_map(|t| match t.tipo {
+            Token::Ident(s) => Some(s),
+            _ => None,
+        })
+        .collect();
+    // FullAdder → fullAdder1, fullAdder2…
+    let mut letras = circuito.chars();
+    let base: String = letras
+        .next()
+        .into_iter()
+        .flat_map(char::to_lowercase)
+        .chain(letras)
+        .collect();
+    let nombre = (1..)
+        .map(|n| format!("{base}{n}"))
+        .find(|n| !usados.contains(n))
+        .expect("siempre hay un número libre");
+    let linea = format!("{nombre} = {circuito}({});", entradas.join(", "));
+    let inicio = codigo[..fin].rfind('\n').map_or(0, |k| k + 1);
+    if codigo[inicio..fin].trim().is_empty() {
+        codigo.insert_str(inicio, &format!("    {linea}\n"));
+    } else {
+        codigo.insert_str(fin, &format!("\n    {linea}\n"));
+    }
+    Some(linea)
+}
+
+/// El circuito como SVG: las figuras que egui dibujó en el lienzo, en sus coordenadas.
+/// `marco` es lo que se ve; `fondo`, el color de atrás.
+// ponytail: solo las figuras que usa el lienzo (rect, círculo, línea, trazo, texto de una fuente por fila)
+fn svg(figuras: &[Shape], marco: Rect, fondo: Color32) -> String {
+    use std::fmt::Write;
+    fn color(c: Color32) -> String {
+        let [r, g, b, a] = c.to_srgba_unmultiplied();
+        if a == 0 {
+            "none".into()
+        } else {
+            format!("rgba({r},{g},{b},{:.3})", a as f32 / 255.0)
+        }
+    }
+    fn trazo(c: Color32, ancho: f32) -> String {
+        if ancho > 0.0 && c.a() > 0 {
+            format!(r#" stroke="{}" stroke-width="{ancho}""#, color(c))
+        } else {
+            String::new()
+        }
+    }
+    fn escapar(t: &str) -> String {
+        t.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+    }
+    fn figura(s: &mut String, f: &Shape) {
+        let _ = match f {
+            Shape::Vec(v) => {
+                v.iter().for_each(|f| figura(s, f));
+                Ok(())
+            }
+            Shape::Rect(r) => {
+                // El trazo de egui va adentro, afuera o en medio del borde
+                let medio = r.stroke.width / 2.0;
+                let q = match r.stroke_kind {
+                    StrokeKind::Inside => r.rect.shrink(medio),
+                    StrokeKind::Outside => r.rect.expand(medio),
+                    StrokeKind::Middle => r.rect,
+                };
+                writeln!(
+                    s,
+                    r#"<rect x="{}" y="{}" width="{}" height="{}" rx="{}" fill="{}"{}/>"#,
+                    q.left(),
+                    q.top(),
+                    q.width(),
+                    q.height(),
+                    r.corner_radius.nw,
+                    color(r.fill),
+                    trazo(r.stroke.color, r.stroke.width)
+                )
+            }
+            Shape::Circle(c) => writeln!(
+                s,
+                r#"<circle cx="{}" cy="{}" r="{}" fill="{}"{}/>"#,
+                c.center.x,
+                c.center.y,
+                c.radius,
+                color(c.fill),
+                trazo(c.stroke.color, c.stroke.width)
+            ),
+            Shape::LineSegment {
+                points: [a, b],
+                stroke,
+            } => writeln!(
+                s,
+                r#"<line x1="{}" y1="{}" x2="{}" y2="{}"{}/>"#,
+                a.x,
+                a.y,
+                b.x,
+                b.y,
+                trazo(stroke.color, stroke.width)
+            ),
+            Shape::Path(p) => {
+                let puntos: Vec<String> = p
+                    .points
+                    .iter()
+                    .map(|q| format!("{},{}", q.x, q.y))
+                    .collect();
+                let linea = match p.stroke.color {
+                    egui::epaint::ColorMode::Solid(c) => trazo(c, p.stroke.width),
+                    _ => String::new(),
+                };
+                let (etiqueta, relleno) = if p.closed {
+                    ("polygon", color(p.fill))
+                } else {
+                    ("polyline", "none".into())
+                };
+                writeln!(
+                    s,
+                    r#"<{etiqueta} points="{}" fill="{relleno}" stroke-linejoin="round"{linea}/>"#,
+                    puntos.join(" ")
+                )
+            }
+            Shape::Text(t) => {
+                let Some(seccion) = t.galley.job.sections.first() else {
+                    return;
+                };
+                let fuente = &seccion.format.font_id;
+                let familia = match fuente.family {
+                    egui::FontFamily::Monospace => "monospace",
+                    _ => "sans-serif",
+                };
+                let tinta = t.override_text_color.unwrap_or(
+                    if seccion.format.color == Color32::PLACEHOLDER {
+                        t.fallback_color
+                    } else {
+                        seccion.format.color
+                    },
+                );
+                for fila in &t.galley.rows {
+                    let r = fila.rect().translate(t.pos.to_vec2());
+                    let _ = writeln!(
+                        s,
+                        r#"<text x="{}" y="{}" font-family="{familia}" font-size="{}" fill="{}" dominant-baseline="central" xml:space="preserve">{}</text>"#,
+                        r.left(),
+                        r.center().y,
+                        fuente.size,
+                        color(tinta),
+                        escapar(&fila.text())
+                    );
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        };
+    }
+    let mut s = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="{} {} {} {}" width="{}" height="{}">"#,
+        marco.left(),
+        marco.top(),
+        marco.width(),
+        marco.height(),
+        marco.width(),
+        marco.height()
+    );
+    s.push('\n');
+    let _ = writeln!(
+        s,
+        r#"<rect x="{}" y="{}" width="{}" height="{}" fill="{}"/>"#,
+        marco.left(),
+        marco.top(),
+        marco.width(),
+        marco.height(),
+        color(fondo)
+    );
+    figuras.iter().for_each(|f| figura(&mut s, f));
+    s.push_str("</svg>\n");
+    s
 }
 
 /// Tabla de verdad en CSV: nombres de entradas y salidas, y una fila de 0 y 1 por combinación
@@ -2705,4 +3032,52 @@ fn dialogo(titulo: &str) -> rfd::FileDialog {
     rfd::FileDialog::new()
         .set_title(titulo)
         .add_filter("Circuito de LogicSM (.SA)", &["SA", "sa"])
+}
+
+#[cfg(test)]
+mod pruebas {
+    use super::*;
+
+    #[test]
+    fn declarar_antes_de_la_ultima_llave() {
+        let mut codigo = "main {\n    in A, B;\n    fullAdder1 = 0;\n}\n".to_string();
+        let linea = insertar_declaracion(&mut codigo, "FullAdder", &["A", "B"]);
+        assert_eq!(linea.as_deref(), Some("fullAdder2 = FullAdder(A, B);"));
+        assert!(codigo.ends_with("    fullAdder2 = FullAdder(A, B);\n}\n"));
+        // La llave en la misma línea que otra cosa
+        let mut codigo = "main { in A; }".to_string();
+        insertar_declaracion(&mut codigo, "Not", &["A"]);
+        assert_eq!(codigo, "main { in A; \n    not1 = Not(A);\n}");
+        assert_eq!(insertar_declaracion(&mut String::new(), "X", &[]), None);
+    }
+
+    #[test]
+    fn svg_con_rect_linea_y_circulo() {
+        let figuras = [
+            Shape::rect_filled(
+                Rect::from_min_size(pos2(0.0, 0.0), vec2(10.0, 5.0)),
+                2.0,
+                Color32::RED,
+            ),
+            Shape::line_segment(
+                [pos2(0.0, 0.0), pos2(4.0, 4.0)],
+                Stroke::new(1.0, Color32::BLACK),
+            ),
+            Shape::circle_filled(pos2(1.0, 2.0), 3.0, Color32::TRANSPARENT),
+        ];
+        let s = svg(
+            &figuras,
+            Rect::from_min_size(pos2(-5.0, -5.0), vec2(20.0, 20.0)),
+            Color32::WHITE,
+        );
+        assert!(s.starts_with(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="-5 -5 20 20""#));
+        assert!(s.contains(
+            r#"<rect x="0" y="0" width="10" height="5" rx="2" fill="rgba(255,0,0,1.000)"/>"#
+        ));
+        assert!(s.contains(
+            r#"<line x1="0" y1="0" x2="4" y2="4" stroke="rgba(0,0,0,1.000)" stroke-width="1"/>"#
+        ));
+        assert!(s.contains(r#"<circle cx="1" cy="2" r="3" fill="none"/>"#));
+        assert!(s.ends_with("</svg>\n"));
+    }
 }
