@@ -92,6 +92,8 @@ pub enum Tipo {
     Mas,         // +
     MasMas,      // ++
     Menos,       // -
+    /// `// ...` o `/* ... */`: solo los devuelve [`resaltar`], para el editor
+    Comentario,
     Fin,
 }
 
@@ -104,6 +106,15 @@ pub struct Token {
 
 /// Devuelve los tokens (siempre termina en `Tipo::Fin`) y los errores encontrados.
 pub fn tokenizar(fuente: &str) -> (Vec<Token>, Vec<Error>) {
+    lexer(fuente, false)
+}
+
+/// Como [`tokenizar`], pero también devuelve los comentarios: para colorear el editor.
+pub fn resaltar(fuente: &str) -> (Vec<Token>, Vec<Error>) {
+    lexer(fuente, true)
+}
+
+fn lexer(fuente: &str, comentarios: bool) -> (Vec<Token>, Vec<Error>) {
     let b = fuente.as_bytes();
     let mut tokens = Vec::new();
     let mut errores = Vec::new();
@@ -121,7 +132,10 @@ pub fn tokenizar(fuente: &str) -> (Vec<Token>, Vec<Error>) {
                 while i < b.len() && b[i] != b'\n' {
                     i += 1;
                 }
-                continue;
+                if !comentarios {
+                    continue;
+                }
+                Tipo::Comentario
             }
             b'/' if b.get(i + 1) == Some(&b'*') => {
                 match fuente[i + 2..].find("*/") {
@@ -131,7 +145,10 @@ pub fn tokenizar(fuente: &str) -> (Vec<Token>, Vec<Error>) {
                         error("comentario `/*` sin cerrar".into(), inicio..i);
                     }
                 }
-                continue;
+                if !comentarios {
+                    continue;
+                }
+                Tipo::Comentario
             }
             b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
                 while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
@@ -277,6 +294,25 @@ mod tests {
                 Texto("datos.hex".into()),
                 Fin,
             ]
+        );
+    }
+
+    #[test]
+    fn resaltar_devuelve_los_comentarios() {
+        let (tokens, errores) = resaltar("in A; // uno\n/* dos */ out X;");
+        assert!(errores.is_empty());
+        let comentarios: Vec<_> = tokens
+            .iter()
+            .filter(|t| t.tipo == Tipo::Comentario)
+            .map(|t| t.rango.clone())
+            .collect();
+        assert_eq!(comentarios, [6..12, 13..22]);
+        // tokenizar los sigue ignorando: el parser nunca los ve
+        assert!(
+            tokenizar("// uno\n/* dos */")
+                .0
+                .iter()
+                .all(|t| t.tipo == Tipo::Fin)
         );
     }
 

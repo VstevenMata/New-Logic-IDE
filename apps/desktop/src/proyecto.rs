@@ -10,6 +10,7 @@
 use logicsm_core::lexer::{Tipo, tokenizar};
 use logicsm_core::{Error, Netlist};
 use std::collections::HashMap;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 /// Prefijo de las líneas del proyecto que no son código de ningún archivo
@@ -18,6 +19,21 @@ const MARCA: &str = "//@ ";
 
 /// Posición de cada pieza movida en el lienzo, por su clave
 pub type Posiciones = HashMap<String, [f32; 2]>;
+
+/// Un error para la pestaña Problemas
+#[derive(Clone, Debug)]
+pub struct Problema {
+    /// "Mux4, línea 3: mensaje"
+    pub texto: String,
+    /// Archivo y rango en bytes dentro de su código: para subrayarlo y saltar a él
+    pub lugar: Option<(String, Range<usize>)>,
+}
+
+impl Problema {
+    pub fn sin_lugar(texto: String) -> Self {
+        Self { texto, lugar: None }
+    }
+}
 
 pub struct Archivo {
     /// Sin extensión: `Mux2`
@@ -264,21 +280,21 @@ impl Proyecto {
     }
 
     /// Compila el archivo abierto
-    pub fn compilar(&self) -> Result<Netlist, Vec<String>> {
+    pub fn compilar(&self) -> Result<Netlist, Vec<Problema>> {
         self.compilar_archivo(self.activo)
     }
 
     /// Junta todos los archivos y compila el circuito principal del archivo `indice`
     /// (`main`, o el último que ningún otro usa). Cada error dice su archivo y línea.
-    pub fn compilar_archivo(&self, indice: usize) -> Result<Netlist, Vec<String>> {
+    pub fn compilar_archivo(&self, indice: usize) -> Result<Netlist, Vec<Problema>> {
         use logicsm_core::parser::parsear;
         let abierto = &self.archivos[indice];
         let circuitos = parsear(&abierto.codigo).map_err(|e| ubicar_todos(abierto, &e))?;
         let Some(principal) = logicsm_core::principal(&circuitos) else {
-            return Err(vec![format!(
+            return Err(vec![Problema::sin_lugar(format!(
                 "{}: no hay ningún circuito; empieza con `circuit Nombre {{ ... }}`",
                 abierto.nombre
-            )]);
+            ))]);
         };
 
         // Un archivo con errores de sintaxis se deja fuera: no bloquea a los demás
@@ -287,10 +303,10 @@ impl Proyecto {
         let mut rotos = Vec::new();
         for (i, a) in self.archivos.iter().enumerate() {
             if i != indice && parsear(&a.codigo).is_err() {
-                rotos.push(format!(
+                rotos.push(Problema::sin_lugar(format!(
                     "{} tiene errores de sintaxis: sus circuitos no se pueden usar hasta corregirlo.",
                     a.nombre
-                ));
+                )));
                 continue;
             }
             tramos.push((fuente.len(), a));
@@ -299,7 +315,7 @@ impl Proyecto {
         }
 
         logicsm_core::compilar_circuito(&fuente, &principal.nombre.texto).map_err(|errores| {
-            let mut problemas: Vec<String> = errores
+            let mut problemas: Vec<Problema> = errores
                 .iter()
                 .map(|e| {
                     let &(inicio, a) = tramos
@@ -307,7 +323,8 @@ impl Proyecto {
                         .rev()
                         .find(|(inicio, _)| *inicio <= e.rango.start)
                         .expect("el primer tramo empieza en 0");
-                    ubicar(a, e.rango.start - inicio, &e.mensaje)
+                    let rango = e.rango.start - inicio..e.rango.end.saturating_sub(inicio);
+                    ubicar(a, rango, &e.mensaje)
                 })
                 .collect();
             problemas.extend(rotos);
@@ -316,19 +333,22 @@ impl Proyecto {
     }
 }
 
-/// "Mux4, línea 3: mensaje"
-fn ubicar(a: &Archivo, posicion: usize, mensaje: &str) -> String {
-    let linea = a.codigo[..posicion.min(a.codigo.len())]
+/// "Mux4, línea 3: mensaje", con el lugar del error en el archivo
+fn ubicar(a: &Archivo, rango: Range<usize>, mensaje: &str) -> Problema {
+    let linea = a.codigo[..rango.start.min(a.codigo.len())]
         .matches('\n')
         .count()
         + 1;
-    format!("{}, línea {linea}: {mensaje}", a.nombre)
+    Problema {
+        texto: format!("{}, línea {linea}: {mensaje}", a.nombre),
+        lugar: Some((a.nombre.clone(), rango)),
+    }
 }
 
-fn ubicar_todos(a: &Archivo, errores: &[Error]) -> Vec<String> {
+fn ubicar_todos(a: &Archivo, errores: &[Error]) -> Vec<Problema> {
     errores
         .iter()
-        .map(|e| ubicar(a, e.rango.start, &e.mensaje))
+        .map(|e| ubicar(a, e.rango.clone(), &e.mensaje))
         .collect()
 }
 
@@ -363,8 +383,13 @@ mod tests {
 
         // El error dice en qué archivo y línea está
         p.actual_mut().codigo = "circuit X {\n    out Y;\n    Y = Z;\n}".into();
+        let errores = p.compilar().unwrap_err();
+        // y dónde: el editor subraya justo la palabra
+        let (archivo, rango) = errores[0].lugar.clone().unwrap();
+        assert_eq!(archivo, "SumadorCompleto");
+        assert_eq!(&p.actual().codigo[rango], "Z");
         assert_eq!(
-            p.compilar().unwrap_err(),
+            errores.into_iter().map(|e| e.texto).collect::<Vec<_>>(),
             [
                 "SumadorCompleto, línea 3: `Z` no existe: declárala con `in` o asígnale un valor",
                 "main tiene errores de sintaxis: sus circuitos no se pueden usar hasta corregirlo.",

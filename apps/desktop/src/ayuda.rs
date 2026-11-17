@@ -435,6 +435,7 @@ pub fn atajos(ui: &mut egui::Ui) {
                 ("Tamaño normal", "Ctrl+0"),
                 ("Panel de proyecto", "Ctrl+B"),
                 ("Panel inferior", "Ctrl+J"),
+                ("Entradas y salidas", "Ctrl+Alt+B"),
                 ("Reiniciar simulación", "Ctrl+Shift+F5"),
                 ("Guía del lenguaje", "F1"),
             ] {
