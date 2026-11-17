@@ -80,10 +80,13 @@ if [ $SO = linux ]; then
     DATOS="${XDG_DATA_HOME:-$HOME/.local/share}/$CMD"
     DESKTOP="${XDG_DATA_HOME:-$HOME/.local/share}/applications/$CMD.desktop"
     ICONO="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/512x512/apps/$CMD.png"
+    # Los proyectos .SA: su tipo de archivo y su ícono
+    MIME="${XDG_DATA_HOME:-$HOME/.local/share}/mime/packages/$CMD.xml"
+    ICONO_SA="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/512x512/mimetypes/application-x-$CMD.png"
 else
     CONFIG="$HOME/Library/Application Support/$CMD"
     CACHE="$HOME/Library/Caches/$CMD"
-    DATOS="" DESKTOP="" ICONO=""
+    DATOS="" DESKTOP="" ICONO="" MIME="" ICONO_SA=""
 fi
 
 # Instalación existente: ~/.local/bin/logicsm es el ejecutable, o un enlace a él si se eligió otra carpeta
@@ -221,20 +224,37 @@ instalar() {
 
     if [ -n "$DESKTOP" ]; then
         # El ícono es opcional: si no se puede bajar, el acceso queda con el ícono genérico
-        mkdir -p "${ICONO%/*}" "${DESKTOP%/*}"
+        mkdir -p "${ICONO%/*}" "${DESKTOP%/*}" "${ICONO_SA%/*}" "${MIME%/*}"
         curl -fsL --connect-timeout 10 -o "$ICONO" "https://raw.githubusercontent.com/$REPO/$VERSION/assets/logo.png" || true
+        curl -fsL --connect-timeout 10 -o "$ICONO_SA" "https://raw.githubusercontent.com/$REPO/$VERSION/assets/archivo.png" || true
+        cat >"$MIME" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-$CMD">
+    <comment>Proyecto de $NOMBRE</comment>
+    <sub-class-of type="text/plain"/>
+    <glob pattern="*.SA" case-sensitive="true"/>
+    <glob pattern="*.sa" case-sensitive="true"/>
+  </mime-type>
+</mime-info>
+EOF
         cat >"$DESKTOP" <<EOF
 [Desktop Entry]
 Type=Application
 Name=$NOMBRE
 Comment=Diseña, visualiza y simula circuitos digitales
-Exec="$destino"
+Exec="$destino" %f
 Icon=$ICONO
+MimeType=application/x-$CMD;
 StartupWMClass=$CMD
 Terminal=false
 Categories=Development;Education;Electronics;
 EOF
-        ok "Acceso agregado al menú de aplicaciones"
+        # Que el sistema vea el tipo nuevo; sin estas herramientas lo toma al reiniciar la sesión
+        update-mime-database "${MIME%/packages/*}" >/dev/null 2>&1 || true
+        update-desktop-database "${DESKTOP%/*}" >/dev/null 2>&1 || true
+        xdg-mime default "$CMD.desktop" "application/x-$CMD" >/dev/null 2>&1 || true
+        ok "Acceso agregado al menú de aplicaciones; los .SA se abren con $NOMBRE"
     fi
 
     if [ -n "$ACTUAL" ]; then
@@ -258,7 +278,8 @@ EOF
 desinstalar() {
     local rc
     echo
-    rm -f "$ACTUAL" "$ENLACE" "$DESKTOP" "$ICONO" "$FISH"
+    rm -f "$ACTUAL" "$ENLACE" "$DESKTOP" "$ICONO" "$ICONO_SA" "$MIME" "$FISH"
+    if [ -n "$MIME" ]; then update-mime-database "${MIME%/packages/*}" >/dev/null 2>&1 || true; fi
     rm -rf "$CONFIG" "$CACHE" "$DATOS"
     for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
         if [ -f "$rc" ] && grep -qxF "$LINEA_PATH" "$rc"; then

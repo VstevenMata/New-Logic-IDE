@@ -17,6 +17,9 @@ $Cmd = 'logicsm'
 # Como Code.exe en VS Code: en la carpeta se ve LogicSM, y el comando logicsm igual funciona (Windows no distingue mayúsculas)
 $ArchivoExe = 'LogicSM.exe'
 $Acceso = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\LogicSM.lnk"
+# Los proyectos .SA se abren con LogicSM y tienen su propio ícono (solo para este usuario)
+$Clases = 'HKCU:\Software\Classes'
+$TipoSA = 'LogicSM.Proyecto'
 # Carpetas de datos de la app: la desinstalación las borra. Los proyectos de los estudiantes NO deben guardarse aquí.
 $Datos = @("$env:APPDATA\LogicSM", "$env:LOCALAPPDATA\LogicSM")
 # La consola clásica no tiene todos los símbolos; Windows Terminal y PowerShell 7 sí
@@ -104,6 +107,15 @@ function Instalar {
     $lnk.Save()
     Ok 'Acceso agregado al menú Inicio'
 
+    # El ícono es opcional: si no se puede bajar, los .SA quedan con el genérico
+    $ico = Join-Path $Raiz 'archivo.ico'
+    try { Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/$Repo/$Version/assets/archivo.ico" -OutFile $ico } catch {}
+    [void](New-Item -Force "$Clases\.SA" -Value $TipoSA)
+    [void](New-Item -Force "$Clases\$TipoSA" -Value "Proyecto de $Nombre")
+    [void](New-Item -Force "$Clases\$TipoSA\DefaultIcon" -Value "`"$ico`"")
+    [void](New-Item -Force "$Clases\$TipoSA\shell\open\command" -Value "`"$exe`" `"%1`"")
+    Ok "Los archivos .SA se abren con $Nombre"
+
     if ($Previa) {
         $versiones = if ($instalada) { "$instalada → $Version" } else { $Version }
         Write-Host "`n  $Nombre se actualizó correctamente.`n" -ForegroundColor Green
@@ -127,7 +139,8 @@ function Quitar {
     # Si la app está abierta, su .exe no se puede borrar
     Get-Process $Cmd -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe } | Stop-Process -Force
     Start-Sleep -Milliseconds 300
-    Remove-Item -Force -ErrorAction SilentlyContinue $exe, $Acceso
+    Remove-Item -Force -ErrorAction SilentlyContinue $exe, $Acceso, (Join-Path $Previa 'archivo.ico')
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$Clases\.SA", "$Clases\$TipoSA"
     if ((Test-Path $Previa) -and -not (Get-ChildItem -Force $Previa)) { Remove-Item -Force $Previa }
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $Datos
     QuitarDelPath $Previa

@@ -8,27 +8,34 @@ mod interfaz;
 mod proyecto;
 
 use eframe::egui;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 /// Logo de la app: ícono de la ventana y barra superior
 pub const LOGO: &[u8] = include_bytes!("../../../assets/logo.png");
 
-// logicsm (o logicsm open) abre la ventana; logicsm update | delete | help son comandos de terminal
+/// Ícono de los proyectos `.SA` (el mismo que les pone el instalador en el sistema)
+pub const ICONO_SA: &[u8] = include_bytes!("../../../assets/archivo.png");
+
+// logicsm (o logicsm open) abre la ventana y logicsm Proyecto.SA abre ese proyecto (doble click
+// en el explorador); logicsm update | delete | help son comandos de terminal
 fn main() -> ExitCode {
-    match std::env::args().nth(1).as_deref() {
-        None | Some("open") => match ventana() {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(e) => {
-                comandos::consola();
-                eprintln!("error: {e}");
-                ExitCode::FAILURE
-            }
-        },
-        Some(orden) => comandos::ejecutar(orden),
+    let resultado = match std::env::args().nth(1).as_deref() {
+        None | Some("open") => ventana(None),
+        Some(ruta) if proyecto::es_sa(ruta.as_ref()) => ventana(Some(ruta.into())),
+        Some(orden) => return comandos::ejecutar(orden),
+    };
+    match resultado {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            comandos::consola();
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
     }
 }
 
-fn ventana() -> eframe::Result {
+fn ventana(proyecto: Option<PathBuf>) -> eframe::Result {
     let opciones = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("LogicSM")
@@ -46,7 +53,7 @@ fn ventana() -> eframe::Result {
         opciones,
         Box::new(|cc| {
             interfaz::estilo(&cc.egui_ctx);
-            Ok(Box::new(interfaz::Interfaz::nueva(&cc.egui_ctx)))
+            Ok(Box::new(interfaz::Interfaz::nueva(cc, proyecto)))
         }),
     )
 }

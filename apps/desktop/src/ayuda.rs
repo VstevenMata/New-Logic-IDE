@@ -7,7 +7,7 @@ use eframe::egui::{self, CornerRadius, Margin, RichText, TextureHandle, vec2};
 // incluidos los circuitos que usa, y abre el último.
 
 const MEDIO_SUMADOR: (&str, &str) = (
-    "MedioSumador.SA",
+    "MedioSumador",
     "// Medio sumador: suma dos bits.
 circuit MedioSumador {
     in A, B;
@@ -20,9 +20,9 @@ circuit MedioSumador {
 );
 
 const SUMADOR_COMPLETO: (&str, &str) = (
-    "SumadorCompleto.SA",
+    "SumadorCompleto",
     "// Sumador completo: suma dos bits y el acarreo que llega.
-// Usa dos MedioSumador (están en MedioSumador.SA).
+// Usa dos MedioSumador (están en el archivo MedioSumador).
 circuit SumadorCompleto {
     in A, B, Cin;
     out S, Cout;
@@ -37,7 +37,7 @@ circuit SumadorCompleto {
 );
 
 const SUMADOR_4_BITS: (&str, &str) = (
-    "Sumador4.SA",
+    "Sumador4",
     "// Sumador de 4 bits con buses: A[4] + B[4].
 // Un arreglo de 4 SumadorCompleto y un for que los conecta;
 // el acarreo de cada bit entra al siguiente.
@@ -62,7 +62,7 @@ circuit Sumador4 {
 );
 
 const SUMADOR_2_BITS: (&str, &str) = (
-    "Sumador2.SA",
+    "Sumador2",
     "// Sumador de 2 bits: A1 A0 + B1 B0.
 // Encadena dos SumadorCompleto: el acarreo del bit 0 entra al bit 1.
 circuit Sumador2 {
@@ -80,7 +80,7 @@ circuit Sumador2 {
 );
 
 const MEDIO_RESTADOR: (&str, &str) = (
-    "MedioRestador.SA",
+    "MedioRestador",
     "// Medio restador: A - B.
 circuit MedioRestador {
     in A, B;
@@ -93,7 +93,7 @@ circuit MedioRestador {
 );
 
 const MUX2: (&str, &str) = (
-    "Mux2.SA",
+    "Mux2",
     "// Multiplexor 2 a 1: con S = 0 sale A, con S = 1 sale B.
 circuit Mux2 {
     in A, B, S;
@@ -105,9 +105,9 @@ circuit Mux2 {
 );
 
 const MUX4: (&str, &str) = (
-    "Mux4.SA",
+    "Mux4",
     "// Multiplexor 4 a 1: S1 S0 elige cuál de D0..D3 sale.
-// Hecho con tres Mux2 (están en Mux2.SA).
+// Hecho con tres Mux2 (están en el archivo Mux2).
 circuit Mux4 {
     in D0, D1, D2, D3, S1, S0;
     out Y;
@@ -122,7 +122,7 @@ circuit Mux4 {
 );
 
 const DECO_2A4: (&str, &str) = (
-    "Deco2a4.SA",
+    "Deco2a4",
     "// Decodificador 2 a 4: enciende solo la salida cuyo número forman A1 A0.
 circuit Deco2a4 {
     in A1, A0;
@@ -137,7 +137,7 @@ circuit Deco2a4 {
 );
 
 const CODIFICADOR_4A2: (&str, &str) = (
-    "Codificador4a2.SA",
+    "Codificador4a2",
     "// Codificador con prioridad 4 a 2: da el número de la entrada más alta encendida.
 // V vale 1 si hay alguna entrada encendida.
 circuit Codificador4a2 {
@@ -152,7 +152,7 @@ circuit Codificador4a2 {
 );
 
 const COMPARADOR_1: (&str, &str) = (
-    "Comparador1.SA",
+    "Comparador1",
     "// Comparador de 1 bit.
 circuit Comparador1 {
     in A, B;
@@ -166,9 +166,9 @@ circuit Comparador1 {
 );
 
 const COMPARADOR_2: (&str, &str) = (
-    "Comparador2.SA",
+    "Comparador2",
     "// Comparador de 2 bits: A1 A0 contra B1 B0.
-// Decide el bit alto; si son iguales, decide el bajo. Usa Comparador1.SA.
+// Decide el bit alto; si son iguales, decide el bajo. Usa el archivo Comparador1.
 circuit Comparador2 {
     in A1, A0, B1, B0;
     out Mayor, Igual, Menor;
@@ -184,7 +184,7 @@ circuit Comparador2 {
 );
 
 const PARIDAD: (&str, &str) = (
-    "Paridad4.SA",
+    "Paridad4",
     "// Generador de paridad par: P hace que el total de unos (D3..D0 y P) sea par.
 circuit Paridad4 {
     in D3, D2, D1, D0;
@@ -196,7 +196,7 @@ circuit Paridad4 {
 );
 
 const LATCH_SR: (&str, &str) = (
-    "LatchSR.SA",
+    "LatchSR",
     "// Latch SR con NOR: la realimentación guarda un bit.
 // Enciende S y apágalo: Q se queda en 1. Enciende R y apágalo: Q vuelve a 0.
 circuit LatchSR {
@@ -210,9 +210,9 @@ circuit LatchSR {
 );
 
 const LATCH_D: (&str, &str) = (
-    "LatchD.SA",
+    "LatchD",
     "// Latch D: mientras E = 1, Q copia a D; con E = 0 recuerda el último valor.
-// Usa LatchSR.SA.
+// Usa el archivo LatchSR.
 circuit LatchD {
     in D, E;
     out Q, Qn;
@@ -369,11 +369,13 @@ pub fn guia(ui: &mut egui::Ui) {
 
     seccion(ui, "Proyecto");
     for paso in [
-        "Un proyecto es una carpeta con archivos .SA.",
-        "El botón + del panel Proyecto crea un archivo nuevo con un circuito del mismo nombre.",
+        "Un proyecto es un solo archivo .SA con varios archivos adentro, como en LogicCircuit.",
+        "El botón + del panel Proyecto pide un nombre y crea un archivo vacío.",
         "Click derecho sobre un archivo para renombrarlo o eliminarlo.",
-        "Ayuda → Ejemplos (o \"Agregar ejemplo\") suma circuitos clásicos al proyecto.",
-        "Guardar pide la carpeta la primera vez; después guarda ahí todos los archivos.",
+        "Ayuda › Ejemplos (o \"Agregar ejemplo\") suma circuitos clásicos al proyecto.",
+        "Guardar pide nombre y lugar la primera vez; después guarda ahí todo el proyecto.",
+        "Archivo › Exportar saca archivos del proyecto como .SA suelto, imagen (PNG) o tabla \
+         de verdad (CSV). Eliges uno, varios o todos; si son varios, se guardan en una carpeta.",
     ] {
         ui.label(format!("•  {paso}"));
     }
@@ -396,9 +398,12 @@ pub fn guia(ui: &mut egui::Ui) {
     for paso in [
         "Haz click en una entrada (en el dibujo o a la derecha) para cambiarla entre 0 y 1.",
         "Cables y salidas en verde valen 1; en gris valen 0.",
-        "Arrastra compuertas, entradas y cajas para acomodarlas; Reordenar las devuelve.",
+        "Arrastra compuertas, entradas y cajas para acomodarlas: se guardan con el proyecto. \
+         Ctrl+Z deshace un movimiento y Reordenar las devuelve a su lugar.",
+        "Mueve el lienzo arrastrando el fondo o con la rueda; Ctrl + rueda acerca y aleja.",
         "Pasa el mouse sobre una pieza para ver su nombre. Cada circuito propio se ve como una caja.",
-        "Los errores aparecen en la pestaña Problemas con su número de línea.",
+        "Los errores aparecen en la pestaña Problemas; con un click vas a su línea.",
+        "Arrastra un archivo .SA a la ventana para abrirlo.",
         "La pestaña Tabla de verdad muestra todas las combinaciones de entradas.",
     ] {
         ui.label(format!("•  {paso}"));
@@ -406,8 +411,8 @@ pub fn guia(ui: &mut egui::Ui) {
 
     seccion(ui, "Todavía no disponible");
     ui.label(
-        "Buses (A[8]), for, button, clock, led, display7, matrix, probe, tristate, \
-         rom y ram. Llegan en las próximas versiones.",
+        "button, clock, led, display7, matrix, probe, tristate, rom y ram. \
+         Llegan en las próximas versiones.",
     );
 }
 
@@ -418,11 +423,11 @@ pub fn atajos(ui: &mut egui::Ui) {
         .show(ui, |ui| {
             for (accion, atajo) in [
                 ("Nuevo proyecto", "Ctrl+N"),
-                ("Abrir carpeta", "Ctrl+O"),
+                ("Abrir proyecto", "Ctrl+O"),
                 ("Guardar", "Ctrl+S"),
                 ("Guardar como", "Ctrl+Shift+S"),
                 ("Salir", "Ctrl+Q"),
-                ("Deshacer", "Ctrl+Z"),
+                ("Deshacer (texto o movimiento en el lienzo)", "Ctrl+Z"),
                 ("Rehacer", "Ctrl+Y"),
                 ("Cortar / Copiar / Pegar", "Ctrl+X / Ctrl+C / Ctrl+V"),
                 ("Seleccionar todo", "Ctrl+A"),

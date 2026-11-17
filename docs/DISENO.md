@@ -87,10 +87,11 @@ El `for` solo **construye** el circuito al compilar (no se ejecuta durante la si
 
 ### Reglas del proyecto
 
-- **Extensión `.SA`** para los archivos de código (el compilador también acepta `.sa`).
-- **Sin `import`:** cualquier circuito de un archivo `.SA` en la carpeta raíz del proyecto se puede usar por su nombre.
-- **Por referencia:** si se modifica `FlipFlop.SA`, todos los circuitos que lo usan reflejan el cambio al recompilar.
-- **Se compila el circuito seleccionado**, no solo `main`. Al abrir `FlipFlop.SA` y presionar ▶ se simula ese circuito, y sus entradas aparecen como interruptores. Solo se compila ese circuito y sus dependencias, así que un error en otro archivo no bloquea la prueba.
+- **Un proyecto es un solo archivo `.SA`** con varios archivos adentro, como el `.CircuitProject` de LogicCircuit: en el explorador del sistema se ve un archivo y en el panel Proyecto se ven todos (sin extensión). Cada archivo empieza con la línea `//@ archivo Nombre` y las piezas movidas van al final como `//@ pos Archivo⇥clave⇥x⇥y`; como son comentarios, el proyecto entero sigue siendo código válido. Un `.SA` sin esas líneas se abre como un proyecto de un solo archivo (el compilador también acepta `.sa`).
+- Los nombres de los archivos son identificadores (como los de circuito), para que cada uno pase tal cual a LogicCircuit al exportar. Exportar → Archivo .SA saca uno de ellos como `.SA` suelto.
+- **Sin `import`:** cualquier circuito de cualquier archivo del proyecto se puede usar por su nombre.
+- **Por referencia:** si se modifica `FlipFlop`, todos los circuitos que lo usan reflejan el cambio al recompilar.
+- **Se compila el circuito seleccionado**, no solo `main`. Al abrir `FlipFlop` y presionar ▶ se simula ese circuito, y sus entradas aparecen como interruptores. Solo se compila ese circuito y sus dependencias, así que un error en otro archivo no bloquea la prueba.
 - Un archivo puede tener varios circuitos; el nombre del archivo no importa, cuenta el nombre del `circuit`.
 - Los moldes de memoria (`rom`, `ram`) declarados fuera de un `circuit` se ven en **todo el proyecto**, igual que los circuitos.
 - Distingue mayúsculas: `Q` y `q` son distintos.
@@ -98,10 +99,14 @@ El `for` solo **construye** el circuito al compilar (no se ejecuta durante la si
 - **Constantes:** `0` y `1` se pueden pasar donde va una señal, por ejemplo `FlipFlop(1, 0)` o `and(A, B, 1)`.
 
 ```
-mi-proyecto/
-├── main.SA
-├── FlipFlop.SA
-└── Contador.SA
+// Proyecto de LogicSM: no borres ni cambies las líneas //@ ...
+//@ archivo main
+main { ... }
+//@ archivo FlipFlop
+circuit FlipFlop { ... }
+//@ archivo Contador
+circuit Contador { ... }
+//@ pos main	caja c1	120	80
 ```
 
 ---
@@ -234,7 +239,7 @@ Los componentes son reservados para que no se puedan tapar (`and = ...` es error
 2. **Asignar a un nombre nuevo lo crea:** molde (`M = ram.size(4, 8);`), instancia (`ff = FlipFlop(S, R);`) o señal (`x = nor(A, B);`).
 3. **Un solo conductor por señal:** asignar dos veces la misma señal es error (excepto salidas tri-state en un bus).
 4. **Cantidades y anchos deben coincidir:** `not(A, B)` es error (espera 1 entrada), igual que `and(A)` (pide 2 o más).
-5. **Resolución de nombres:** circuito actual → moldes y circuitos del proyecto (cualquier `.SA` de la carpeta raíz). Los componentes son reservados, así que nunca chocan.
+5. **Resolución de nombres:** circuito actual → moldes y circuitos del proyecto (cualquier archivo del proyecto). Los componentes son reservados, así que nunca chocan.
 6. Todo `out` debe estar asignado. Entradas sin usar generan advertencia.
 7. Una entrada de subcircuito sin conectar vale **X** y genera advertencia.
 8. El `for` se desenrolla al compilar; su variable solo existe en índices.
@@ -246,7 +251,7 @@ Los componentes son reservados para que no se puedan tapar (`and = ...` es error
 - **Retardo:** cada compuerta tarda 1 unidad de tiempo. Así se ven las carreras y los *glitches*, y los flip-flops funcionan.
 - **Estado inicial:** todo arranca en **X** (rojo), como en la realidad. El botón **Reset** pone todo en 0.
 - **Paso a paso:** cada click avanza una unidad de tiempo y resalta las compuertas que cambiaron.
-- **Dibujo:** se genera automáticamente; las compuertas se pueden arrastrar para acomodarlas y las posiciones se guardan en un `.layout.json` junto al `.SA`. Los circuitos se crean en código, no dibujando.
+- **Dibujo:** se genera automáticamente; las compuertas se pueden arrastrar para acomodarlas y las posiciones se guardan dentro del mismo `.SA` del proyecto. Los circuitos se crean en código, no dibujando.
 - **Idioma:** interfaz y mensajes de error en español; palabras clave en inglés.
 - **Ejemplos incluidos:** compuertas básicas, half adder, full adder, flip-flop SR, contador y display 7 segmentos.
 
@@ -308,7 +313,7 @@ LogicCircuit es GPL-2.0: se implementa un lector/escritor propio del formato, si
 | `egui_dock` | Paneles acoplables tipo IDE |
 | `rfd` | Diálogos nativos de abrir y guardar |
 | `serde` + `serde_json` | Configuración y posiciones del dibujo |
-| `notify` | Vigilar la carpeta del proyecto y recompilar al cambiar un `.SA` |
+| `notify` | Vigilar el `.SA` del proyecto y recargarlo si cambia afuera |
 | `quick-xml` | Exportar e importar proyectos de LogicCircuit |
 | `ariadne` | Errores con el código subrayado en `logicsm-cli` |
 | `egui_plot` | Pestaña de ondas |
