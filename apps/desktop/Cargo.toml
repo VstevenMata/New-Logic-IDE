@@ -8,7 +8,8 @@ repository.workspace = true
 
 [dependencies]
 arboard = { version = "3.7.0", default-features = false }
-eframe = "0.37.0"
+eframe = { version = "0.37.0", features = ["persistence"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
 logicsm-core.workspace = true
 logicsm-sim.workspace = true
 rfd = { version = "0.18.0", default-features = false, features = ["xdg-portal"] }

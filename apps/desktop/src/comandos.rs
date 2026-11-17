@@ -28,9 +28,10 @@ pub fn ejecutar(orden: &str) -> ExitCode {
 
 fn ayuda() {
     println!(
-        "Uso: logicsm [comando]
+        "Uso: logicsm [comando | Proyecto.SA]
 
   open      abre LogicSM (es lo que hace logicsm sin comando)
+  X.SA      abre LogicSM con ese proyecto
   update    actualiza a la última versión
   delete    desinstala LogicSM; tus proyectos no se borran
   help      muestra esta ayuda"

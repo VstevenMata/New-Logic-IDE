@@ -4,14 +4,16 @@
 //! El código se compila en cada cambio y el lienzo dibuja el circuito al instante.
 
 use crate::ayuda;
-use crate::proyecto::Proyecto;
+use crate::proyecto::{Posiciones, Proyecto, es_sa};
 use eframe::egui::{
     self, Align2, Color32, CornerRadius, FontId, Frame, Margin, Pos2, Rect, RichText, Sense, Shape,
     Stroke, StrokeKind, Theme, Vec2, pos2, vec2,
 };
 use logicsm_core::Compuerta;
 use logicsm_core::netlist::{Netlist, Nodo, Split, Tipo};
-use std::collections::HashMap;
+use std::collections::VecDeque;
+use std::path::PathBuf;
+use std::sync::mpsc;
 
 /// Colores de un tema. Hay dos: CLARO (pastel de index.html) y OSCURO.
 struct Paleta {
@@ -79,7 +81,7 @@ fn paleta(ui: &egui::Ui) -> &'static Paleta {
 }
 
 /// Colores y bordes de los widgets de egui para los dos temas.
-/// Arranca con el tema del sistema; el botón de la barra lo cambia.
+/// La primera vez arranca en claro; después, con el último que se eligió.
 pub fn estilo(ctx: &egui::Context) {
     for (tema, c) in [(Theme::Light, &CLARO), (Theme::Dark, &OSCURO)] {
         ctx.style_mut_of(tema, |s| {
@@ -111,10 +113,16 @@ pub fn estilo(ctx: &egui::Context) {
 }
 
 /// Lo que se hace después de confirmar que se pueden perder los cambios sin guardar
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Accion {
+    /// Pide nombre y lugar del proyecto y lo crea
     Nuevo,
+    /// Pide un archivo `.SA`
     Abrir,
+    /// Un `.SA`: recientes y arrastrar
+    AbrirRuta(PathBuf),
+    /// Vuelve a la pantalla de inicio
+    Cerrar,
     Salir,
 }
 
@@ -135,11 +143,20 @@ enum Pestana {
     Salida,
 }
 
+/// Proyectos recientes que se recuerdan
+const RECIENTES: usize = 8;
+/// Movimientos del lienzo que se pueden deshacer
+const DESHACER: usize = 100;
+
 /// Aviso para Ejecutar y Paso a paso mientras no exista `clock`
 const SIN_RELOJ: &str = "Llega con clock. Por ahora la simulación corre sola al escribir.";
 
 pub struct Interfaz {
     proyecto: Proyecto,
+    /// Pantalla de inicio: no hay nada abierto (`proyecto` queda de relleno)
+    sin_proyecto: bool,
+    /// Carpetas abiertas o guardadas hace poco, la más reciente primero
+    recientes: Vec<PathBuf>,
     /// Último circuito que compiló; se queda mientras el código tiene errores.
     red: Option<Netlist>,
     problemas: Vec<String>,
@@ -167,21 +184,107 @@ pub struct Interfaz {
     /// Evento del menú Editar (deshacer, copiar…) que recibe el editor
     para_editor: Option<egui::Event>,
     logo: egui::TextureHandle,
-    /// Piezas del lienzo que el usuario movió, por su clave (ver `clave`), relativas
-    /// a la esquina del lienzo
-    posiciones: HashMap<String, Pos2>,
+    /// Ícono de los proyectos `.SA` (Recientes)
+    icono_sa: egui::TextureHandle,
+    /// Parte del lienzo que se ve (zoom y desplazamiento), en coordenadas del circuito
+    vista: Rect,
+    /// Encuadrar el circuito en el próximo cuadro
+    ajustar: bool,
+    /// Posiciones del archivo abierto antes de cada movimiento, para Ctrl+Z / Ctrl+Y
+    deshacer: Vec<Posiciones>,
+    rehacer: Vec<Posiciones>,
+    /// Lo último que se hizo fue mover piezas: Editar → Deshacer va al lienzo
+    ultimo_lienzo: bool,
+    /// Línea a la que saltar en el editor (click en Problemas): (carácter, línea)
+    ir_a: Option<(usize, usize)>,
+    /// Donde está el lienzo en la ventana: lo que se recorta al exportar la imagen
+    rect_lienzo: Rect,
+    /// Ventana para elegir qué archivos exportar: formato y archivos marcados
+    elegir: Option<(Formato, Vec<bool>)>,
+    /// Exportación a una carpeta donde ya hay archivos con esos nombres: se pregunta
+    reemplazar: Option<(Formato, Vec<(usize, PathBuf)>)>,
+    /// Imágenes por exportar (archivo, ruta); la primera es la que se está capturando.
+    /// Mientras haya, se esconden los controles del lienzo.
+    cola_png: VecDeque<(usize, PathBuf)>,
+    /// Ya se pidió la captura de la primera de la cola
+    pedida: bool,
+    /// El archivo que estaba abierto antes de exportar imágenes, para volver a él
+    volver_a: usize,
+    /// Resultado de guardar la captura, que llega desde otro hilo
+    captura: (mpsc::Sender<Exportado>, mpsc::Receiver<Exportado>),
+}
+
+/// Lo que se puede exportar de cada archivo
+#[derive(Clone, Copy)]
+enum Formato {
+    Sa,
+    Png,
+    Csv,
+}
+
+impl Formato {
+    const TODOS: [Formato; 3] = [Formato::Sa, Formato::Png, Formato::Csv];
+
+    fn menu(self) -> &'static str {
+        match self {
+            Formato::Sa => "Archivo .SA…",
+            Formato::Png => "Imagen (PNG)…",
+            Formato::Csv => "Tabla de verdad (CSV)…",
+        }
+    }
+
+    fn titulo(self) -> &'static str {
+        match self {
+            Formato::Sa => "Exportar como archivo .SA",
+            Formato::Png => "Exportar como imagen",
+            Formato::Csv => "Exportar la tabla de verdad",
+        }
+    }
+
+    fn tipo(self) -> &'static str {
+        match self {
+            Formato::Sa => "Circuito de LogicSM",
+            Formato::Png => "Imagen PNG",
+            Formato::Csv => "Tabla CSV",
+        }
+    }
+
+    fn ext(self) -> &'static str {
+        match self {
+            Formato::Sa => "SA",
+            Formato::Png => "png",
+            Formato::Csv => "csv",
+        }
+    }
 }
 
 impl Interfaz {
-    pub fn nueva(ctx: &egui::Context) -> Self {
-        let icono = eframe::icon_data::from_png_bytes(crate::LOGO)
-            .expect("assets/logo.png es un PNG válido");
-        let imagen = egui::ColorImage::from_rgba_unmultiplied(
-            [icono.width as usize, icono.height as usize],
-            &icono.rgba,
-        );
+    /// Abre `proyecto` o, si no se pasa, el último que quedó abierto
+    pub fn nueva(cc: &eframe::CreationContext, proyecto: Option<PathBuf>) -> Self {
+        let ctx = &cc.egui_ctx;
+        let recientes: Option<Vec<PathBuf>> =
+            cc.storage.and_then(|s| eframe::get_value(s, "recientes"));
+        let ultimo: Option<PathBuf> = cc
+            .storage
+            .and_then(|s| eframe::get_value::<Option<PathBuf>>(s, "ultimo"))
+            .flatten();
+        if recientes.is_none() {
+            // Primera vez: claro. Después egui recuerda el tema elegido.
+            ctx.set_theme(Theme::Light);
+        }
+        let textura = |nombre: &str, png: &[u8]| {
+            let icono =
+                eframe::icon_data::from_png_bytes(png).expect("los PNG de assets son válidos");
+            let imagen = egui::ColorImage::from_rgba_unmultiplied(
+                [icono.width as usize, icono.height as usize],
+                &icono.rgba,
+            );
+            ctx.load_texture(nombre, imagen, egui::TextureOptions::LINEAR)
+        };
         let mut s = Self {
             proyecto: Proyecto::nuevo(),
+            sin_proyecto: true,
+            recientes: recientes.unwrap_or_default(),
             red: None,
             problemas: Vec::new(),
             entradas: Vec::new(),
@@ -199,14 +302,35 @@ impl Interfaz {
             error_nombre: None,
             saliendo: false,
             para_editor: None,
-            logo: ctx.load_texture("logo", imagen, egui::TextureOptions::LINEAR),
-            posiciones: HashMap::new(),
+            logo: textura("logo", crate::LOGO),
+            icono_sa: textura("icono_sa", crate::ICONO_SA),
+            vista: Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0)),
+            ajustar: true,
+            deshacer: Vec::new(),
+            rehacer: Vec::new(),
+            ultimo_lienzo: false,
+            ir_a: None,
+            rect_lienzo: Rect::NOTHING,
+            elegir: None,
+            reemplazar: None,
+            cola_png: VecDeque::new(),
+            pedida: false,
+            volver_a: 0,
+            captura: mpsc::channel(),
         };
-        s.compilar();
+        // El que se pidió (si no existe, cargar avisa) o el último, si todavía existe
+        if let Some(ruta) = proyecto.or(ultimo.filter(|r| r.is_file())) {
+            s.cargar(ruta);
+        }
         s
     }
 
     fn compilar(&mut self) {
+        if self.sin_proyecto {
+            self.red = None;
+            self.problemas.clear();
+            return;
+        }
         match self.proyecto.compilar() {
             Ok(red) => {
                 self.problemas.clear();
@@ -227,8 +351,36 @@ impl Interfaz {
     fn recompilar_desde_cero(&mut self) {
         self.red = None;
         self.entradas.clear();
-        self.posiciones.clear();
+        self.ajustar = true;
+        self.deshacer.clear();
+        self.rehacer.clear();
         self.compilar();
+    }
+
+    /// Abre el `.SA` de un proyecto
+    fn cargar(&mut self, ruta: PathBuf) {
+        match Proyecto::abrir(ruta.clone()) {
+            Ok(proyecto) => self.usar(proyecto),
+            Err(e) => self.aviso(format!("No se pudo abrir {}: {e}", ruta.display())),
+        }
+    }
+
+    /// Pasa a ser el proyecto abierto
+    fn usar(&mut self, proyecto: Proyecto) {
+        if let Some(ruta) = proyecto.ruta.clone() {
+            self.salida.push(format!("Abierto: {}", ruta.display()));
+            self.recordar(ruta);
+        }
+        self.proyecto = proyecto;
+        self.sin_proyecto = false;
+        self.recompilar_desde_cero();
+    }
+
+    /// La pone primera en los recientes
+    fn recordar(&mut self, ruta: PathBuf) {
+        self.recientes.retain(|r| *r != ruta);
+        self.recientes.insert(0, ruta);
+        self.recientes.truncate(RECIENTES);
     }
 
     fn abrir_archivo(&mut self, i: usize) {
@@ -255,25 +407,29 @@ impl Interfaz {
     fn hacer(&mut self, ctx: &egui::Context, accion: Accion) {
         match accion {
             Accion::Nuevo => {
-                self.proyecto = Proyecto::nuevo();
-                self.recompilar_desde_cero();
-            }
-            Accion::Abrir => {
-                let Some(carpeta) = rfd::FileDialog::new()
-                    .set_title("Abrir la carpeta del proyecto")
-                    .pick_folder()
+                let Some(ruta) = dialogo("Nuevo proyecto")
+                    .set_file_name("Proyecto.SA")
+                    .save_file()
                 else {
                     return;
                 };
-                match Proyecto::abrir(carpeta.clone()) {
-                    Ok(proyecto) => {
-                        self.salida.push(format!("Abierto: {}", carpeta.display()));
-                        self.proyecto = proyecto;
-                        self.recompilar_desde_cero();
-                    }
-                    Err(e) => self.aviso(format!("No se pudo abrir {}: {e}", carpeta.display())),
+                let mut proyecto = Proyecto::nuevo();
+                match proyecto.guardar(Some(ruta)) {
+                    Ok(()) => self.usar(proyecto),
+                    Err(e) => self.aviso(e),
                 }
             }
+            Accion::Cerrar => {
+                self.proyecto = Proyecto::nuevo();
+                self.sin_proyecto = true;
+                self.recompilar_desde_cero();
+            }
+            Accion::Abrir => {
+                if let Some(ruta) = dialogo("Abrir un proyecto").pick_file() {
+                    self.cargar(ruta);
+                }
+            }
+            Accion::AbrirRuta(ruta) => self.cargar(ruta),
             Accion::Salir => {
                 self.saliendo = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -281,25 +437,33 @@ impl Interfaz {
         }
     }
 
-    /// Guarda en la carpeta del proyecto, o pregunta cuál (`otra` o si nunca se guardó).
-    /// Devuelve `false` si no se guardó.
+    /// Guarda en el archivo del proyecto, o pide nombre y lugar (`otra`, o si nunca
+    /// se guardó). Devuelve `false` si no se guardó.
     fn guardar(&mut self, otra: bool) -> bool {
-        let nueva = if otra || self.proyecto.carpeta.is_none() {
-            let Some(carpeta) = rfd::FileDialog::new()
-                .set_title("Carpeta donde guardar el proyecto")
-                .pick_folder()
-            else {
+        if self.sin_proyecto {
+            return false;
+        }
+        let nueva = if otra || self.proyecto.ruta.is_none() {
+            let ruta = self.proyecto.ruta.as_deref();
+            let nombre = ruta
+                .and_then(|r| r.file_name())
+                .map_or("Proyecto.SA".into(), |n| n.to_string_lossy());
+            let mut d = dialogo("Guardar el proyecto").set_file_name(nombre);
+            if let Some(carpeta) = ruta.and_then(|r| r.parent()) {
+                d = d.set_directory(carpeta);
+            }
+            let Some(ruta) = d.save_file() else {
                 return false;
             };
-            Some(carpeta)
+            Some(ruta)
         } else {
             None
         };
         match self.proyecto.guardar(nueva) {
             Ok(()) => {
-                if let Some(carpeta) = &self.proyecto.carpeta {
-                    self.salida
-                        .push(format!("Guardado en {}", carpeta.display()));
+                if let Some(ruta) = self.proyecto.ruta.clone() {
+                    self.salida.push(format!("Guardado en {}", ruta.display()));
+                    self.recordar(ruta);
                 }
                 true
             }
@@ -311,6 +475,11 @@ impl Interfaz {
     }
 
     fn agregar_ejemplo(&mut self, archivos: &[(&str, &str)]) {
+        if self.sin_proyecto {
+            // Desde la pantalla de inicio: un proyecto nuevo solo con el ejemplo
+            self.proyecto.archivos.clear();
+            self.sin_proyecto = false;
+        }
         for aviso in self.proyecto.agregar(archivos) {
             self.aviso(aviso);
         }
@@ -347,6 +516,14 @@ impl Interfaz {
         if tecla(ctrl, Key::Q) {
             self.pedir(ctx, Accion::Salir);
         }
+        // Sin nada enfocado (el editor no tiene el cursor), Ctrl+Z deshace movimientos del lienzo
+        if ctx.memory(|m| m.focused().is_none()) {
+            if tecla(ctrl | Modifiers::SHIFT, Key::Z) || tecla(ctrl, Key::Y) {
+                self.mover(true);
+            } else if tecla(ctrl, Key::Z) {
+                self.mover(false);
+            }
+        }
         if tecla(ctrl, Key::B) {
             self.ver_proyecto = !self.ver_proyecto;
         }
@@ -365,6 +542,45 @@ impl Interfaz {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.confirmar = Some(Accion::Salir);
         }
+        // Un archivo .SA soltado sobre la ventana
+        let soltado = ctx.input(|i| i.raw.dropped_files.first().map(|f| f.path().to_path_buf()));
+        if let Some(ruta) = soltado {
+            if ruta.is_file() && es_sa(&ruta) {
+                self.pedir(ctx, Accion::AbrirRuta(ruta));
+            } else {
+                self.aviso(format!("{} no es un archivo .SA.", ruta.display()));
+            }
+        }
+    }
+
+    /// Deshace (o rehace) el último movimiento de piezas del archivo abierto
+    fn mover(&mut self, rehacer: bool) {
+        let (desde, hacia) = if rehacer {
+            (&mut self.rehacer, &mut self.deshacer)
+        } else {
+            (&mut self.deshacer, &mut self.rehacer)
+        };
+        let Some(antes) = desde.pop() else {
+            return;
+        };
+        let archivo = self.proyecto.actual().nombre.clone();
+        hacia.push(
+            self.proyecto
+                .posiciones
+                .insert(archivo, antes)
+                .unwrap_or_default(),
+        );
+        self.ultimo_lienzo = true;
+    }
+
+    /// Guarda la posición actual para poder deshacer lo que viene
+    fn antes_de_mover(&mut self, antes: Posiciones) {
+        self.deshacer.push(antes);
+        if self.deshacer.len() > DESHACER {
+            self.deshacer.remove(0);
+        }
+        self.rehacer.clear();
+        self.ultimo_lienzo = true;
     }
 
     /// Diálogos "Hay cambios sin guardar" y "¿Eliminar el archivo?"
@@ -380,7 +596,7 @@ impl Interfaz {
                         .strong(),
                 );
                 ui.add_space(4.0);
-                ui.label("También se borra de la carpeta del proyecto.");
+                ui.label("Se quita del proyecto al guardar.");
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
                     if ui.button("Eliminar").clicked() {
@@ -406,7 +622,7 @@ impl Interfaz {
             }
         }
 
-        let Some(accion) = self.confirmar else {
+        let Some(accion) = self.confirmar.clone() else {
             return;
         };
         enum Respuesta {
@@ -480,9 +696,23 @@ impl Interfaz {
 }
 
 impl eframe::App for Interfaz {
+    /// Lo demás (tema, zoom, tamaño de la ventana) lo recuerdan egui y eframe
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        let ultimo = (!self.sin_proyecto)
+            .then(|| self.proyecto.ruta.clone())
+            .flatten();
+        eframe::set_value(storage, "recientes", &self.recientes);
+        eframe::set_value(storage, "ultimo", &ultimo);
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.atajos(&ctx);
+        while let Ok(resultado) = self.captura.1.try_recv() {
+            self.informar(resultado);
+            self.cola_png.pop_front();
+            self.preparar_imagen();
+        }
         if let Some(red) = &self.red {
             self.estable = logicsm_sim::simular(red, &mut self.valores, &self.entradas);
         }
@@ -496,6 +726,14 @@ impl eframe::App for Interfaz {
                     .inner_margin(Margin::symmetric(14, 0)),
             )
             .show(ui, |ui| self.barra_superior(ui));
+        if self.sin_proyecto {
+            egui::CentralPanel::default()
+                .frame(Frame::new().fill(c.fondo))
+                .show(ui, |ui| self.bienvenida(ui));
+            self.ventanas(&ctx);
+            self.confirmacion(&ctx);
+            return;
+        }
         if self.ver_proyecto {
             egui::Panel::left("proyecto")
                 .exact_size(190.0)
@@ -535,14 +773,271 @@ impl eframe::App for Interfaz {
             .show(ui, |ui| self.lienzo(ui));
         self.ventanas(&ctx);
         self.confirmacion(&ctx);
+        self.ventana_exportar(&ctx);
     }
 }
 
-/// Formatos de exportación (menú Archivo y botón Exportar de Proyecto)
+/// Formatos de exportación que faltan
 // ponytail: deshabilitados hasta que exista cada exportador
-const FORMATOS: [&str; 3] = ["Imagen (PNG)", "Tabla de verdad (CSV)", "Verilog (.v)"];
+const FORMATOS: [&str; 2] = ["LogicCircuit (.CircuitProject)", "Verilog (.v)"];
+
+/// Mensaje para Salida, o el error para avisar
+type Exportado = Result<String, String>;
+
+/// Más entradas que esto hacen una tabla de verdad demasiado grande para exportar
+const MAX_ENTRADAS_CSV: usize = 16;
 
 impl Interfaz {
+    /// Menú Archivo → Exportar y botón Exportar de Proyecto
+    fn exportar(&mut self, ui: &mut egui::Ui) {
+        let libre = self.cola_png.is_empty();
+        for formato in Formato::TODOS {
+            if ui
+                .add_enabled(libre, egui::Button::new(formato.menu()))
+                .on_disabled_hover_text("Exportando imágenes…")
+                .clicked()
+            {
+                if self.proyecto.archivos.len() == 1 {
+                    self.exportar_a(ui.ctx(), formato, vec![0]);
+                } else {
+                    // Marcado de entrada: el archivo abierto
+                    let marcados = (0..self.proyecto.archivos.len())
+                        .map(|i| i == self.proyecto.activo)
+                        .collect();
+                    self.elegir = Some((formato, marcados));
+                }
+            }
+        }
+        for formato in FORMATOS {
+            ui.add_enabled(false, egui::Button::new(formato))
+                .on_disabled_hover_text("Todavía no disponible");
+        }
+    }
+
+    /// Ventanas de Exportar: qué archivos, y si se reemplazan los que ya existen
+    fn ventana_exportar(&mut self, ctx: &egui::Context) {
+        if let Some((formato, marcados)) = &mut self.elegir {
+            let formato = *formato;
+            let mut listo = None;
+            let r = egui::Modal::new(egui::Id::unique("exportar")).show(ctx, |ui| {
+                ui.set_width(340.0);
+                ui.label(RichText::new(formato.titulo()).size(14.0).strong());
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label("¿Qué archivos?");
+                    if ui.small_button("Todos").clicked() {
+                        marcados.fill(true);
+                    }
+                    if ui.small_button("Ninguno").clicked() {
+                        marcados.fill(false);
+                    }
+                });
+                ui.add_space(4.0);
+                egui::ScrollArea::vertical()
+                    .max_height(260.0)
+                    .show(ui, |ui| {
+                        for (a, marcado) in self.proyecto.archivos.iter().zip(marcados.iter_mut()) {
+                            ui.checkbox(marcado, &a.nombre);
+                        }
+                    });
+                ui.add_space(8.0);
+                let cuantos = marcados.iter().filter(|&&m| m).count();
+                ui.label(
+                    RichText::new(match cuantos {
+                        0 => "Marca al menos uno.".to_string(),
+                        1 => "Luego eliges el nombre y dónde guardarlo.".to_string(),
+                        n => format!("Luego eliges la carpeta para los {n}."),
+                    })
+                    .size(11.5)
+                    .color(paleta(ui).tenue),
+                );
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(cuantos > 0, egui::Button::new("Exportar"))
+                        .clicked()
+                    {
+                        listo = Some(true);
+                    }
+                    if ui.button("Cancelar").clicked() {
+                        listo = Some(false);
+                    }
+                });
+            });
+            if r.should_close() && listo.is_none() {
+                listo = Some(false);
+            }
+            if let Some(exportar) = listo
+                && let Some((formato, marcados)) = self.elegir.take()
+                && exportar
+            {
+                let indices = (0..marcados.len()).filter(|&i| marcados[i]).collect();
+                self.exportar_a(ctx, formato, indices);
+            }
+        }
+
+        let Some((formato, destinos)) = &self.reemplazar else {
+            return;
+        };
+        let existen: Vec<String> = destinos
+            .iter()
+            .filter(|(_, r)| r.exists())
+            .map(|(_, r)| r.file_name().unwrap_or_default().to_string_lossy().into())
+            .collect();
+        let formato = *formato;
+        let mut reemplazar = None;
+        let r = egui::Modal::new(egui::Id::unique("reemplazar")).show(ctx, |ui| {
+            ui.set_width(340.0);
+            ui.label(
+                RichText::new("Ya existen en esa carpeta")
+                    .size(14.0)
+                    .strong(),
+            );
+            ui.add_space(4.0);
+            ui.label(existen.join(", "));
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                if ui.button("Reemplazar").clicked() {
+                    reemplazar = Some(true);
+                }
+                if ui.button("Cancelar").clicked() {
+                    reemplazar = Some(false);
+                }
+            });
+        });
+        if r.should_close() && reemplazar.is_none() {
+            reemplazar = Some(false);
+        }
+        if let Some(si) = reemplazar
+            && let Some((_, destinos)) = self.reemplazar.take()
+            && si
+        {
+            self.escribir(formato, destinos);
+        }
+    }
+
+    /// Pide dónde guardar (un archivo, o una carpeta si son varios) y exporta
+    fn exportar_a(&mut self, ctx: &egui::Context, formato: Formato, indices: Vec<usize>) {
+        let ext = formato.ext();
+        let carpeta_proyecto = self
+            .proyecto
+            .ruta
+            .as_deref()
+            .and_then(|r| r.parent())
+            .map(PathBuf::from);
+        let destinos: Vec<(usize, PathBuf)> = if let [i] = indices[..] {
+            let mut d = rfd::FileDialog::new()
+                .set_title(formato.titulo())
+                .add_filter(formato.tipo(), &[ext])
+                .set_file_name(format!("{}.{ext}", self.proyecto.archivos[i].nombre));
+            if let Some(c) = &carpeta_proyecto {
+                d = d.set_directory(c);
+            }
+            let Some(ruta) = d.save_file() else {
+                return;
+            };
+            let tiene = ruta
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case(ext));
+            vec![(
+                i,
+                if tiene {
+                    ruta
+                } else {
+                    ruta.with_extension(ext)
+                },
+            )]
+        } else {
+            let mut d =
+                rfd::FileDialog::new().set_title(format!("{}: elige la carpeta", formato.titulo()));
+            if let Some(c) = &carpeta_proyecto {
+                d = d.set_directory(c);
+            }
+            let Some(carpeta) = d.pick_folder() else {
+                return;
+            };
+            indices
+                .into_iter()
+                .map(|i| {
+                    let nombre = format!("{}.{ext}", self.proyecto.archivos[i].nombre);
+                    (i, carpeta.join(nombre))
+                })
+                .collect()
+        };
+        // Nunca se escribe encima del proyecto (un archivo con su mismo nombre, en .SA)
+        if let Some(propio) = &self.proyecto.ruta
+            && destinos.iter().any(|(_, r)| r == propio)
+        {
+            self.aviso(format!(
+                "Exportar ahí reemplazaría el proyecto {}: elige otra carpeta.",
+                propio.display()
+            ));
+            return;
+        }
+        // Con un solo archivo, el diálogo del sistema ya preguntó si se reemplaza
+        if destinos.len() > 1 && destinos.iter().any(|(_, r)| r.exists()) {
+            self.reemplazar = Some((formato, destinos));
+            return;
+        }
+        self.escribir(formato, destinos);
+        ctx.request_repaint();
+    }
+
+    fn escribir(&mut self, formato: Formato, destinos: Vec<(usize, PathBuf)>) {
+        if let Formato::Png = formato {
+            self.volver_a = self.proyecto.activo;
+            self.cola_png = destinos.into();
+            self.preparar_imagen();
+            return;
+        }
+        for (i, ruta) in destinos {
+            let contenido = match formato {
+                Formato::Csv => self
+                    .proyecto
+                    .compilar_archivo(i)
+                    .map_err(|_| "tiene errores".to_string())
+                    .and_then(|red| tabla_csv(&red)),
+                _ => Ok(self.proyecto.archivos[i].codigo.clone()),
+            };
+            let resultado = contenido
+                .map_err(|e| format!("{}: {e}, no se exportó.", self.proyecto.archivos[i].nombre))
+                .and_then(|texto| {
+                    std::fs::write(&ruta, texto)
+                        .map(|()| format!("Exportado: {}", ruta.display()))
+                        .map_err(|e| format!("No se pudo exportar {}: {e}", ruta.display()))
+                });
+            self.informar(resultado);
+        }
+    }
+
+    /// Abre el siguiente archivo de la cola de imágenes y lo encuadra; el lienzo lo
+    /// captura cuando ya está dibujado así. Al terminar vuelve al archivo de antes.
+    fn preparar_imagen(&mut self) {
+        while let Some(&(i, _)) = self.cola_png.front() {
+            if i != self.proyecto.activo {
+                self.abrir_archivo(i);
+            }
+            if self.red.is_some() {
+                self.ajustar = true;
+                self.pedida = false;
+                return;
+            }
+            let nombre = self.proyecto.archivos[i].nombre.clone();
+            self.aviso(format!("{nombre}: tiene errores, no se exportó."));
+            self.cola_png.pop_front();
+        }
+        if self.volver_a != self.proyecto.activo && self.volver_a < self.proyecto.archivos.len() {
+            self.abrir_archivo(self.volver_a);
+        }
+    }
+
+    fn informar(&mut self, resultado: Exportado) {
+        match resultado {
+            Ok(m) => self.salida.push(m),
+            Err(e) => self.aviso(e),
+        }
+    }
+
     /// Logo, nombre y menú a la izquierda, controles de simulación y el tema a la derecha
     fn barra_superior(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_centered(|ui| {
@@ -592,13 +1087,13 @@ impl Interfaz {
         };
 
         ui.menu_button("Archivo", |ui| {
-            if opcion(ui, "Nuevo proyecto", "Ctrl+N") {
+            if opcion(ui, "Nuevo proyecto…", "Ctrl+N") {
                 self.pedir(&ctx, Accion::Nuevo);
             }
-            if opcion(ui, "Abrir carpeta…", "Ctrl+O") {
+            if opcion(ui, "Abrir proyecto…", "Ctrl+O") {
                 self.pedir(&ctx, Accion::Abrir);
             }
-            if opcion(ui, "Nuevo archivo", "") {
+            if !self.sin_proyecto && opcion(ui, "Nuevo archivo", "") {
                 self.ver_proyecto = true;
                 self.nombrando = Some((None, String::new()));
                 self.error_nombre = None;
@@ -607,25 +1102,33 @@ impl Interfaz {
             if opcion(ui, "Guardar", "Ctrl+S") {
                 self.guardar(false);
             }
-            if opcion(ui, "Guardar en otra carpeta…", "Ctrl+Shift+S") {
+            if opcion(ui, "Guardar como…", "Ctrl+Shift+S") {
                 self.guardar(true);
             }
-            ui.menu_button("Exportar", |ui| {
-                for formato in FORMATOS {
-                    ui.add_enabled(false, egui::Button::new(formato));
-                }
-            });
+            ui.menu_button("Exportar", |ui| self.exportar(ui));
             ui.separator();
+            if !self.sin_proyecto && opcion(ui, "Cerrar proyecto", "") {
+                self.pedir(&ctx, Accion::Cerrar);
+            }
             if opcion(ui, "Salir", "Ctrl+Q") {
                 self.pedir(&ctx, Accion::Salir);
             }
         });
         ui.menu_button("Editar", |ui| {
+            // Deshace en el lienzo si lo último fue mover piezas; si no, en el editor
             if opcion(ui, "Deshacer", "Ctrl+Z") {
-                self.para_editor = Some(tecla(egui::Key::Z));
+                if self.ultimo_lienzo {
+                    self.mover(false);
+                } else {
+                    self.para_editor = Some(tecla(egui::Key::Z));
+                }
             }
             if opcion(ui, "Rehacer", "Ctrl+Y") {
-                self.para_editor = Some(tecla(egui::Key::Y));
+                if self.ultimo_lienzo {
+                    self.mover(true);
+                } else {
+                    self.para_editor = Some(tecla(egui::Key::Y));
+                }
             }
             ui.separator();
             if opcion(ui, "Cortar", "Ctrl+X") {
@@ -729,7 +1232,7 @@ impl Interfaz {
                 self.pedir(&ctx, Accion::Nuevo);
             }
             if accion(ui, "Abrir")
-                .on_hover_text("Abrir la carpeta de un proyecto (Ctrl+O)")
+                .on_hover_text("Abrir un proyecto .SA (Ctrl+O)")
                 .clicked()
             {
                 self.pedir(&ctx, Accion::Abrir);
@@ -742,26 +1245,34 @@ impl Interfaz {
             {
                 self.guardar(false);
             }
-            let exportar = accion(ui, "Exportar ▾");
-            egui::Popup::menu(&exportar).show(|ui| {
-                for formato in FORMATOS {
-                    ui.add_enabled(false, egui::Button::new(formato));
-                }
-            });
+            // Espacios al final: el texto se corre a la izquierda y deja lugar a la flecha
+            let exportar = accion(ui, "Exportar    ");
+            flecha_abajo(ui, &exportar);
+            egui::Popup::menu(&exportar).show(|ui| self.exportar(ui));
         });
         ui.add_space(14.0);
 
         // Carpeta y botón para crear archivos
-        let carpeta = match &self.proyecto.carpeta {
-            Some(c) => c
-                .file_name()
+        let marca = if self.proyecto.sin_guardar() {
+            " •"
+        } else {
+            ""
+        };
+        let carpeta = match &self.proyecto.ruta {
+            Some(r) => r
+                .file_stem()
                 .unwrap_or_default()
                 .to_string_lossy()
                 .into_owned(),
             None => "Sin guardar".into(),
         };
         ui.horizontal(|ui| {
-            ui.label(RichText::new(carpeta).size(12.0).strong());
+            ui.label(
+                RichText::new(format!("{carpeta}{marca}"))
+                    .size(12.0)
+                    .strong(),
+            )
+            .on_hover_text("El proyecto: un solo archivo .SA con todos estos adentro");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
                     .small_button("+")
@@ -784,7 +1295,7 @@ impl Interfaz {
             .archivos
             .iter()
             .map(|a| {
-                let marca = if a.sin_guardar() { " ●" } else { "" };
+                let marca = if a.sin_guardar() { " •" } else { "" };
                 format!("{}{marca}", a.nombre)
             })
             .collect();
@@ -804,9 +1315,8 @@ impl Interfaz {
                     }
                     r.context_menu(|ui| {
                         if ui.button("Renombrar…").clicked() {
-                            let a = &self.proyecto.archivos[i].nombre;
-                            let base = a.strip_suffix(".SA").unwrap_or(a).to_string();
-                            self.nombrando = Some((Some(i), base));
+                            let nombre = self.proyecto.archivos[i].nombre.clone();
+                            self.nombrando = Some((Some(i), nombre));
                             self.error_nombre = None;
                         }
                         if ui.button("Eliminar…").clicked() {
@@ -818,10 +1328,83 @@ impl Interfaz {
 
         ui.add_space(8.0);
         let ejemplos = ui.add(
-            egui::Button::new(RichText::new("Agregar ejemplo ▾").size(12.0))
+            egui::Button::new(RichText::new("Agregar ejemplo").size(12.0))
                 .min_size(vec2(ui.available_width(), 28.0)),
         );
+        flecha_abajo(ui, &ejemplos);
         egui::Popup::menu(&ejemplos).show(|ui| self.lista_de_ejemplos(ui));
+    }
+
+    /// Pantalla de inicio, sin proyecto abierto (como la bienvenida de VS Code)
+    fn bienvenida(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let c = paleta(ui);
+        let ancho = 260.0;
+        let opcion = |ui: &mut egui::Ui, texto: &str, atajo: &str| {
+            ui.add(
+                egui::Button::new(RichText::new(texto).size(13.0))
+                    .shortcut_text(atajo)
+                    .min_size(vec2(ancho, 34.0)),
+            )
+        };
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space((ui.available_height() * 0.18).max(30.0));
+                ui.image((self.logo.id(), vec2(64.0, 64.0)));
+                ui.add_space(12.0);
+                ui.label(RichText::new("Pura Carpintería").size(30.0).strong());
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new("Aquí va el código. Crea un proyecto o abre uno para empezar.")
+                        .size(13.0)
+                        .color(c.tenue),
+                );
+                ui.add_space(24.0);
+                // Sin proyecto no hay cambios que perder: no hace falta confirmar
+                if opcion(ui, "Nuevo proyecto…", "Ctrl+N").clicked() {
+                    self.hacer(&ctx, Accion::Nuevo);
+                }
+                if opcion(ui, "Abrir proyecto…", "Ctrl+O").clicked() {
+                    self.hacer(&ctx, Accion::Abrir);
+                }
+                let ejemplos = opcion(ui, "Empezar con un ejemplo", "");
+                flecha_abajo(ui, &ejemplos);
+                egui::Popup::menu(&ejemplos).show(|ui| self.lista_de_ejemplos(ui));
+
+                // Solo las que todavía existen
+                let recientes: Vec<PathBuf> = self
+                    .recientes
+                    .iter()
+                    .filter(|r| r.is_file())
+                    .cloned()
+                    .collect();
+                if !recientes.is_empty() {
+                    ui.add_space(26.0);
+                    ui.label(RichText::new("Recientes").size(12.0).strong());
+                    ui.add_space(4.0);
+                    for ruta in recientes {
+                        let nombre = ruta.file_stem().unwrap_or_default().to_string_lossy();
+                        let icono = egui::Image::new((self.icono_sa.id(), vec2(18.0, 18.0)));
+                        if ui
+                            .add(
+                                egui::Button::image_and_text(
+                                    icono,
+                                    RichText::new(nombre).size(13.0),
+                                )
+                                .frame(false),
+                            )
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .on_hover_text(ruta.display().to_string())
+                            .clicked()
+                        {
+                            self.hacer(&ctx, Accion::AbrirRuta(ruta.clone()));
+                        }
+                    }
+                }
+                ui.add_space(26.0);
+                vacio(ui, "También puedes arrastrar un archivo .SA a la ventana.");
+            });
+        });
     }
 
     /// Campo de texto para el nombre de un archivo nuevo o del que se renombra.
@@ -872,9 +1455,25 @@ impl Interfaz {
     /// Nombre del archivo abierto para la cabecera del editor
     fn nombre_archivo(&self) -> String {
         let a = self.proyecto.actual();
-        let marca = if a.sin_guardar() { " ●" } else { "" };
+        let marca = if a.sin_guardar() { " •" } else { "" };
         format!("Código — {}{marca}", a.nombre)
     }
+}
+
+/// Triángulo ▾ a la derecha de un botón que abre un menú. Se dibuja en vez de escribirlo:
+/// en egui los símbolos dependen de las fuentes del sistema y en Linux salía un cuadro vacío.
+fn flecha_abajo(ui: &egui::Ui, boton: &egui::Response) {
+    let c = boton.rect.right_center() - vec2(12.0, 0.0);
+    let color = ui.visuals().widgets.style(boton).fg_stroke.color;
+    ui.painter().add(Shape::convex_polygon(
+        vec![
+            c + vec2(-4.0, -2.0),
+            c + vec2(4.0, -2.0),
+            c + vec2(0.0, 3.0),
+        ],
+        color,
+        egui::Stroke::NONE,
+    ));
 }
 
 /// Título de sección ("Proyecto", "Entradas"…)
@@ -930,7 +1529,20 @@ impl Interfaz {
             ui.memory_mut(|m| m.request_focus(id));
             ui.input_mut(|i| i.events.push(evento));
         }
-        egui::ScrollArea::vertical().show(ui, |ui| {
+        let mut area = egui::ScrollArea::vertical();
+        // Click en Problemas: cursor al inicio de la línea y la línea a la vista
+        if let Some((caracter, linea)) = self.ir_a.take() {
+            let mut estado = egui::text_edit::TextEditState::load(ui.ctx(), id).unwrap_or_default();
+            let cursor = egui::text::CCursor::new(caracter);
+            estado
+                .cursor
+                .set_char_range(Some(egui::text::CCursorRange::one(cursor)));
+            estado.store(ui.ctx(), id);
+            ui.memory_mut(|m| m.request_focus(id));
+            let alto = ui.text_style_height(&egui::TextStyle::Monospace);
+            area = area.vertical_scroll_offset((linea as f32 - 4.0).max(0.0) * alto);
+        }
+        area.show(ui, |ui| {
             let r = ui.add(
                 egui::TextEdit::multiline(&mut self.proyecto.actual_mut().codigo)
                     .id(id)
@@ -939,68 +1551,131 @@ impl Interfaz {
                     .desired_rows(40),
             );
             if r.changed() {
+                self.ultimo_lienzo = false;
                 self.compilar();
             }
         });
     }
 
+    /// "Mux4, línea 3: …" → abre ese archivo con el cursor en esa línea
+    fn ir_al_problema(&mut self, problema: &str) {
+        let Some((archivo, resto)) = problema.split_once(", línea ") else {
+            return;
+        };
+        let Some(linea) = resto
+            .split_once(':')
+            .and_then(|(n, _)| n.parse::<usize>().ok())
+        else {
+            return;
+        };
+        let Some(i) = self
+            .proyecto
+            .archivos
+            .iter()
+            .position(|a| a.nombre == archivo)
+        else {
+            return;
+        };
+        if i != self.proyecto.activo {
+            self.abrir_archivo(i);
+        }
+        let caracter = self
+            .proyecto
+            .actual()
+            .codigo
+            .split_inclusive('\n')
+            .take(linea.saturating_sub(1))
+            .map(|l| l.chars().count())
+            .sum();
+        self.ir_a = Some((caracter, linea));
+    }
+
     fn lienzo(&mut self, ui: &mut egui::Ui) {
         let c = paleta(ui);
         cabecera(ui, "Circuito");
-        let rect = ui.available_rect_before_wrap();
-        let p = ui.painter_at(rect);
+        let afuera = ui.available_rect_before_wrap();
+        self.rect_lienzo = afuera;
+        let Some(red) = &self.red else {
+            ui.painter().text(
+                afuera.center(),
+                Align2::CENTER_CENTER,
+                "Escribe un circuito en el editor",
+                FontId::monospace(13.0),
+                c.tenue,
+            );
+            return;
+        };
 
-        let mut y = rect.top() + 9.0;
-        while y < rect.bottom() {
-            let mut x = rect.left() + 9.0;
-            while x < rect.right() {
-                p.circle_filled(pos2(x, y), 0.9, c.puntos);
-                x += 18.0;
-            }
-            y += 18.0;
+        // Arrastrar el fondo o la rueda mueven la vista; Ctrl + rueda acerca y aleja
+        let archivo = self.proyecto.actual().nombre.clone();
+        let posiciones = self.proyecto.posiciones.entry(archivo).or_default();
+        let dibujo = egui::Scene::new()
+            .zoom_range(0.2..=3.0)
+            .show(ui, &mut self.vista, |ui| {
+                puntos(ui);
+                dibujar(ui, red, &self.valores, &mut self.entradas, posiciones)
+            })
+            .inner;
+        if let Some(antes) = dibujo.antes {
+            self.antes_de_mover(antes);
         }
-        match &self.red {
-            Some(red) => dibujar(
-                ui,
-                rect,
-                red,
-                &self.valores,
-                &mut self.entradas,
-                &mut self.posiciones,
-            ),
-            None => {
-                p.text(
-                    rect.center(),
-                    Align2::CENTER_CENTER,
-                    "Escribe un circuito en el editor",
-                    FontId::monospace(13.0),
-                    c.tenue,
+        if self.ajustar && dibujo.contenido.is_positive() {
+            self.ajustar = false;
+            let r = dibujo.contenido.expand(50.0);
+            // Sin agrandar un circuito chico: se ve a tamaño normal, centrado
+            self.vista = Rect::from_center_size(r.center(), r.size().max(afuera.size()));
+            ui.ctx().request_repaint();
+        }
+
+        // Exportando imágenes: se captura cuando ya se dibujó encuadrado
+        if let Some((_, ruta)) = self.cola_png.front() {
+            if !self.pedida && !self.ajustar {
+                self.pedida = true;
+                capturar(
+                    ui.ctx(),
+                    self.rect_lienzo,
+                    ruta.clone(),
+                    self.captura.0.clone(),
                 );
             }
+            return;
         }
-
-        // Controles del lienzo, abajo a la derecha
-        let mut x = rect.right() - 12.0;
-        let y = rect.bottom() - 39.0;
-        for (texto, ancho) in [
-            ("Reordenar", 82.0),
-            ("Ajustar", 64.0),
-            ("−", 29.0),
-            ("+", 29.0),
-        ] {
-            x -= ancho;
-            let r = ui.put(
-                Rect::from_min_size(pos2(x, y), vec2(ancho, 27.0)),
-                egui::Button::new(RichText::new(texto).size(11.0).color(c.tenue)),
-            );
-            // ponytail: Ajustar y el zoom siguen sin función
-            if texto == "Reordenar"
-                && r.on_hover_text("Devuelve las piezas movidas a su lugar")
-                    .clicked()
-            {
-                self.posiciones.clear();
-            }
-            x -= 4.0;
+        // Controles del lienzo, abajo a la derecha, por encima del dibujo
+        let mut zoom = None;
+        egui::Area::new(egui::Id::unique("controles_lienzo"))
+            .order(egui::Order::Middle)
+            .fixed_pos(afuera.right_bottom() - vec2(12.0, 12.0))
+            .pivot(Align2::RIGHT_BOTTOM)
+            .show(ui.ctx(), |ui| {
+                ui.horizontal(|ui| {
+                    let control = |ui: &mut egui::Ui, texto: &str, ayuda: &str| {
+                        ui.add(
+                            egui::Button::new(RichText::new(texto).size(11.0).color(c.tenue))
+                                .min_size(vec2(29.0, 27.0)),
+                        )
+                        .on_hover_text(ayuda)
+                        .clicked()
+                    };
+                    if control(ui, "-", "Alejar (Ctrl + rueda)") {
+                        zoom = Some(1.25);
+                    }
+                    if control(ui, "+", "Acercar (Ctrl + rueda)") {
+                        zoom = Some(0.8);
+                    }
+                    if control(ui, "Ajustar", "Muestra todo el circuito") {
+                        self.ajustar = true;
+                    }
+                    if control(ui, "Reordenar", "Devuelve las piezas movidas a su lugar") {
+                        let archivo = self.proyecto.actual().nombre.clone();
+                        if let Some(antes) = self.proyecto.posiciones.remove(&archivo) {
+                            self.antes_de_mover(antes);
+                        }
+                        self.ajustar = true;
+                    }
+                });
+            });
+        if let Some(f) = zoom {
+            self.vista = Rect::from_center_size(self.vista.center(), self.vista.size() * f);
         }
     }
 
@@ -1052,6 +1727,7 @@ impl Interfaz {
             x = r.right() + 21.0;
         }
         ui.add_space(10.0);
+        let mut ir_a = None;
         egui::ScrollArea::vertical().show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.add_space(15.0);
@@ -1061,7 +1737,13 @@ impl Interfaz {
                             vacio(ui, "Sin problemas.");
                         }
                         for problema in &problemas {
-                            ui.label(RichText::new(problema).size(12.0).monospace());
+                            let r = ui.add(
+                                egui::Label::new(RichText::new(problema).size(12.0).monospace())
+                                    .sense(Sense::click()),
+                            );
+                            if r.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                                ir_a = Some(problema.clone());
+                            }
                         }
                     }
                     Pestana::Tabla => self.tabla_de_verdad(ui),
@@ -1077,6 +1759,9 @@ impl Interfaz {
                 });
             });
         });
+        if let Some(problema) = ir_a {
+            self.ir_al_problema(&problema);
+        }
     }
 
     /// Todas las combinaciones de entradas y lo que vale cada salida
@@ -1087,23 +1772,7 @@ impl Interfaz {
             vacio(ui, "Escribe un circuito para ver su tabla de verdad.");
             return;
         };
-        let entradas: Vec<&str> = red
-            .nodos
-            .iter()
-            .filter_map(|n| match &n.tipo {
-                Tipo::Entrada(nombre) => Some(nombre.as_str()),
-                _ => None,
-            })
-            .collect();
-        let salidas: Vec<(usize, &str)> = red
-            .nodos
-            .iter()
-            .enumerate()
-            .filter_map(|(i, n)| match &n.tipo {
-                Tipo::Salida(nombre) => Some((i, nombre.as_str())),
-                _ => None,
-            })
-            .collect();
+        let (entradas, salidas) = columnas_de_tabla(red);
         let n = entradas.len();
         if n > 8 {
             vacio(ui, "Con más de 8 entradas la tabla sería demasiado larga.");
@@ -1123,7 +1792,7 @@ impl Interfaz {
                 ui.end_row();
                 let mut valores = Vec::new();
                 for fila in 0..1usize << n {
-                    let e: Vec<bool> = (0..n).map(|i| (fila >> (n - 1 - i)) & 1 == 1).collect();
+                    let e = fila_de_entradas(fila, n);
                     valores.clear();
                     logicsm_sim::simular(red, &mut valores, &e);
                     for &v in &e {
@@ -1137,6 +1806,75 @@ impl Interfaz {
                 }
             });
     }
+}
+
+/// Guarda como PNG la parte `rect` del próximo cuadro (el lienzo) y manda el resultado
+fn capturar(ctx: &egui::Context, rect: Rect, ruta: PathBuf, envio: mpsc::Sender<Exportado>) {
+    let (ppp, ctx2) = (ctx.pixels_per_point(), ctx.clone());
+    ctx.request_screenshot(move |imagen| {
+        let recorte = imagen.region(&rect, Some(ppp));
+        let [ancho, alto] = recorte.size.map(|n| n as u32);
+        let resultado = image::RgbaImage::from_raw(ancho, alto, recorte.as_raw().to_vec())
+            .ok_or_else(|| "la captura salió vacía".to_string())
+            .and_then(|img| img.save(&ruta).map_err(|e| e.to_string()))
+            .map(|()| format!("Exportado: {}", ruta.display()))
+            .map_err(|e| format!("No se pudo exportar {}: {e}", ruta.display()));
+        let _ = envio.send(resultado);
+        ctx2.request_repaint();
+    });
+    ctx.request_repaint();
+}
+
+/// Tabla de verdad en CSV: nombres de entradas y salidas, y una fila de 0 y 1 por combinación
+fn tabla_csv(red: &Netlist) -> Result<String, String> {
+    let (entradas, salidas) = columnas_de_tabla(red);
+    let n = entradas.len();
+    if n > MAX_ENTRADAS_CSV {
+        return Err(format!(
+            "tiene más de {MAX_ENTRADAS_CSV} entradas, la tabla sería demasiado grande"
+        ));
+    }
+    let mut csv = entradas
+        .iter()
+        .copied()
+        .chain(salidas.iter().map(|&(_, nombre)| nombre))
+        .collect::<Vec<_>>()
+        .join(",");
+    csv.push('\n');
+    let mut valores = Vec::new();
+    for fila in 0..1usize << n {
+        let e = fila_de_entradas(fila, n);
+        valores.clear();
+        logicsm_sim::simular(red, &mut valores, &e);
+        let bits: Vec<&str> = e
+            .iter()
+            .copied()
+            .chain(salidas.iter().map(|&(i, _)| valores[i]))
+            .map(|v| if v { "1" } else { "0" })
+            .collect();
+        csv.push_str(&bits.join(","));
+        csv.push('\n');
+    }
+    Ok(csv)
+}
+
+/// Columnas de la tabla de verdad: nombres de las entradas y (nodo, nombre) de las salidas
+fn columnas_de_tabla(red: &Netlist) -> (Vec<&str>, Vec<(usize, &str)>) {
+    let mut entradas = Vec::new();
+    let mut salidas = Vec::new();
+    for (i, n) in red.nodos.iter().enumerate() {
+        match &n.tipo {
+            Tipo::Entrada(nombre) => entradas.push(nombre.as_str()),
+            Tipo::Salida(nombre) => salidas.push((i, nombre.as_str())),
+            _ => {}
+        }
+    }
+    (entradas, salidas)
+}
+
+/// Valores de las `n` entradas en la fila `fila` (la primera entrada es el bit más alto)
+fn fila_de_entradas(fila: usize, n: usize) -> Vec<bool> {
+    (0..n).map(|i| (fila >> (n - 1 - i)) & 1 == 1).collect()
 }
 
 // ---------- Dibujo del circuito ----------
@@ -1295,10 +2033,39 @@ fn descripcion(red: &Netlist, pieza: Pieza) -> String {
                 Tipo::Salida(x) => format!("Salida {x}"),
                 Tipo::Constante(v) => format!("Constante {}", *v as u8),
                 Tipo::Compuerta(g) if n.nombre.is_empty() => g.nombre().to_uppercase(),
-                Tipo::Compuerta(g) => format!("{} → {}", g.nombre().to_uppercase(), n.nombre),
+                Tipo::Compuerta(g) => format!("{} = {}", n.nombre, g.nombre().to_uppercase()),
             }
         }
     }
+}
+
+/// Puntos de la cuadrícula en la parte visible del lienzo
+fn puntos(ui: &egui::Ui) {
+    const PASO: f32 = 18.0;
+    let c = paleta(ui);
+    let r = ui.clip_rect();
+    // Muy alejado serían demasiados puntos: no se dibujan
+    if r.width() * r.height() / (PASO * PASO) > 40_000.0 {
+        return;
+    }
+    let p = ui.painter();
+    let mut y = (r.top() / PASO).floor() * PASO + PASO / 2.0;
+    while y < r.bottom() {
+        let mut x = (r.left() / PASO).floor() * PASO + PASO / 2.0;
+        while x < r.right() {
+            p.circle_filled(pos2(x, y), 0.9, c.puntos);
+            x += PASO;
+        }
+        y += PASO;
+    }
+}
+
+/// Lo que pasó al dibujar
+struct Dibujo {
+    /// Rectángulo que ocupan las piezas
+    contenido: Rect,
+    /// Empezó a moverse una pieza: posiciones de antes, para deshacer
+    antes: Option<Posiciones>,
 }
 
 /// Altura del pin `k` de `n` repartidos en el lado de `r`
@@ -1306,16 +2073,20 @@ fn altura_pin(r: Rect, k: usize, n: usize) -> f32 {
     r.top() + r.height() * (k + 1) as f32 / (n + 1) as f32
 }
 
+/// Dibuja el circuito en coordenadas del lienzo (dentro de un `Scene`)
 fn dibujar(
     ui: &mut egui::Ui,
-    rect: Rect,
     red: &Netlist,
     valores: &[bool],
     entradas: &mut [bool],
-    posiciones: &mut HashMap<String, Pos2>,
-) {
+    posiciones: &mut Posiciones,
+) -> Dibujo {
     let c = paleta(ui);
-    let p = ui.painter_at(rect);
+    let p = ui.painter().clone();
+    let mut dibujo = Dibujo {
+        contenido: Rect::NOTHING,
+        antes: None,
+    };
 
     // Piezas: los nodos sueltos y una caja por instancia
     let mut piezas: Vec<Pieza> = (0..red.nodos.len())
@@ -1381,16 +2152,8 @@ fn dibujar(
         .collect();
     let max_filas = por_columna.iter().copied().max().unwrap_or(1);
 
-    // Centrado en el lienzo; si no cabe, empieza arriba a la izquierda
-    // ponytail: sin zoom ni desplazamiento; llegan con los botones del lienzo
-    let medida = vec2(
-        num_cols.saturating_sub(1) as f32 * ANCHO_COLUMNA,
-        max_filas.saturating_sub(1) as f32 * ALTO_FILA,
-    );
-    let origen = pos2(
-        (rect.center().x - medida.x / 2.0).max(rect.left() + 70.0),
-        (rect.center().y - medida.y / 2.0).max(rect.top() + 40.0),
-    );
+    // "Ajustar" encuadra el resultado, así que el origen da igual
+    let origen = pos2(70.0, 40.0);
     let mut centros: Vec<Pos2> = (0..total)
         .map(|j| {
             let hueco = (max_filas - por_columna[cols[j]]) as f32 * ALTO_FILA / 2.0;
@@ -1406,17 +2169,20 @@ fn dibujar(
     let mut k = 0;
     for (j, &pieza) in piezas.iter().enumerate() {
         let clave = clave(red, pieza);
-        if let Some(&guardada) = posiciones.get(&clave) {
-            centros[j] = guardada + rect.min.to_vec2();
+        if let Some(&[x, y]) = posiciones.get(&clave) {
+            centros[j] = pos2(x, y);
         }
         let r = ui.interact(
             Rect::from_center_size(centros[j], tam(pieza)),
             ui.scope_id().with(&clave),
             Sense::click_and_drag(),
         );
+        if r.drag_started() {
+            dibujo.antes = Some(posiciones.clone());
+        }
         if r.dragged() {
-            centros[j] = (centros[j] + r.drag_delta()).clamp(rect.min, rect.max);
-            posiciones.insert(clave, centros[j] - rect.min.to_vec2());
+            centros[j] += r.drag_delta();
+            posiciones.insert(clave, [centros[j].x, centros[j].y]);
         }
         if matches!(pieza, Pieza::Nodo(i) if matches!(red.nodos[i].tipo, Tipo::Entrada(_))) {
             if r.clicked() {
@@ -1474,10 +2240,10 @@ fn dibujar(
         pos2(r.left() + atras, y)
     };
 
+    dibujo.contenido = (0..total).map(caja).fold(Rect::NOTHING, Rect::union);
+
     // Cables (debajo de los componentes), en ángulo recto
-    let abajo = (0..total)
-        .map(|j| caja(j).bottom())
-        .fold(rect.top(), f32::max);
+    let abajo = dibujo.contenido.bottom();
     let mut lazos = 0;
     for (j, fs) in fuentes.iter().enumerate() {
         for (k, &fuente) in fs.iter().enumerate() {
@@ -1620,6 +2386,7 @@ fn dibujar(
             }
         }
     }
+    dibujo
 }
 
 /// Encabezado de 38 px con línea inferior, para el editor y el lienzo
@@ -1727,4 +2494,11 @@ fn boton(ui: &mut egui::Ui, texto: &str, icono: Icono, principal: bool) -> egui:
         }
     }
     r
+}
+
+/// Diálogo de archivos que solo muestra los `.SA`
+fn dialogo(titulo: &str) -> rfd::FileDialog {
+    rfd::FileDialog::new()
+        .set_title(titulo)
+        .add_filter("Circuito de LogicSM (.SA)", &["SA", "sa"])
 }
