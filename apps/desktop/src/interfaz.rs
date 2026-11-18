@@ -9,8 +9,9 @@ use eframe::egui::{
     self, Align2, Color32, CornerRadius, FontId, Frame, Margin, Pos2, Rect, RichText, Sense, Shape,
     Stroke, StrokeKind, Theme, Vec2, pos2, vec2,
 };
-use logicsm_core::Compuerta;
-use logicsm_core::netlist::{Netlist, Nodo, Split, Tipo};
+use logicsm_core::netlist::{Clase, Netlist, Nodo, Split, Tipo};
+use logicsm_core::{Compuerta, Valor};
+use logicsm_sim::Estado;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -89,6 +90,18 @@ const OSCURO: Paleta = Paleta {
     comentario: Color32::from_rgb(0x84, 0x9c, 0x7e),
     error: Color32::from_rgb(0xf0, 0x7c, 0x70),
 };
+
+impl Paleta {
+    /// Color de un valor: verde en 1, gris en 0, rojo en X y lavanda en Z
+    fn de(&self, v: Valor) -> Color32 {
+        match v {
+            Valor::Uno => self.uno,
+            Valor::Cero => self.tenue,
+            Valor::X => self.error,
+            Valor::Z => self.lavanda,
+        }
+    }
+}
 
 /// La paleta del tema activo
 fn paleta(ui: &egui::Ui) -> &'static Paleta {
@@ -180,8 +193,8 @@ pub struct Interfaz {
     problemas: Vec<Problema>,
     /// Valor de cada `in`, en orden
     entradas: Vec<bool>,
-    /// Valor de cada nodo de `red` (guarda la memoria de los flip-flops)
-    valores: Vec<bool>,
+    /// Valor de cada nodo de `red`, memoria de los flip-flops y de las RAM
+    estado: Estado,
     estable: bool,
     /// Mensajes de la pestaña Salida (archivos abiertos, guardados, errores)
     salida: Vec<String>,
@@ -315,7 +328,7 @@ impl Interfaz {
             red: None,
             problemas: Vec::new(),
             entradas: Vec::new(),
-            valores: Vec::new(),
+            estado: Estado::default(),
             estable: true,
             salida: Vec::new(),
             pestana: Pestana::Problemas,
@@ -364,10 +377,10 @@ impl Interfaz {
                 let n = red
                     .nodos
                     .iter()
-                    .filter(|n| matches!(n.tipo, Tipo::Entrada(_)))
+                    .filter(|n| matches!(n.tipo, Tipo::Entrada(..)))
                     .count();
                 self.entradas.resize(n, false);
-                self.valores.clear();
+                self.estado = Estado::default();
                 self.red = Some(red);
             }
             Err(problemas) => self.problemas = problemas,
@@ -613,10 +626,12 @@ impl Interfaz {
         }
     }
 
-    /// Entradas en 0 y se borra la memoria de los flip-flops
+    /// Entradas en 0 y todo lo demás también, la memoria de los flip-flops incluida
     fn reiniciar(&mut self) {
         self.entradas.fill(false);
-        self.valores.clear();
+        if let Some(red) = &self.red {
+            self.estado.reiniciar(red);
+        }
     }
 
     fn atajos(&mut self, ctx: &egui::Context) {
@@ -857,7 +872,7 @@ impl eframe::App for Interfaz {
             self.preparar_imagen();
         }
         if let Some(red) = &self.red {
-            self.estable = logicsm_sim::simular(red, &mut self.valores, &self.entradas);
+            self.estable = logicsm_sim::simular(red, &mut self.estado, &self.entradas);
         }
         let c = paleta(ui);
         egui::Panel::top("barra")
@@ -1710,7 +1725,7 @@ impl Interfaz {
         titulo(ui, "Entradas");
         let mut k = 0;
         for n in &red.nodos {
-            if let Tipo::Entrada(nombre) = &n.tipo {
+            if let Tipo::Entrada(nombre, _) = &n.tipo {
                 let v = &mut self.entradas[k];
                 let texto = format!("{nombre} = {}", *v as u8);
                 ui.toggle_value(v, texto);
@@ -1719,13 +1734,12 @@ impl Interfaz {
         }
         ui.add_space(24.0);
         titulo(ui, "Salidas");
-        for (n, &v) in red.nodos.iter().zip(&self.valores) {
+        for (n, &v) in red.nodos.iter().zip(&self.estado.valores) {
             if let Tipo::Salida(nombre) = &n.tipo {
-                let color = if v { c.uno } else { c.tenue };
                 ui.label(
-                    RichText::new(format!("{nombre} = {}", v as u8))
+                    RichText::new(format!("{nombre} = {}", v.simbolo()))
                         .monospace()
-                        .color(color),
+                        .color(c.de(v)),
                 );
             }
         }
@@ -1900,8 +1914,13 @@ impl Interfaz {
                         let cuadricula = ui
                             .ctx()
                             .graphics(|g| g.get(capa).map_or(0, |l| l.all_entries().len()));
-                        let dibujo =
-                            dibujar(ui, red, &self.valores, &mut self.entradas, posiciones);
+                        let dibujo = dibujar(
+                            ui,
+                            red,
+                            &self.estado.valores,
+                            &mut self.entradas,
+                            posiciones,
+                        );
                         (capa, cuadricula, dibujo)
                     })
                     .inner
@@ -1930,7 +1949,7 @@ impl Interfaz {
                             .collect()
                     })
                 });
-                let texto = svg(&figuras, dibujo.contenido.expand(20.0), c.fondo);
+                let texto = svg(&figuras, c.fondo);
                 let resultado = std::fs::write(ruta, texto)
                     .map(|()| format!("Exportado: {}", ruta.display()))
                     .map_err(|e| format!("No se pudo exportar {}: {e}", ruta.display()));
@@ -2076,7 +2095,7 @@ impl Interfaz {
     }
 
     /// Todas las combinaciones de entradas y lo que vale cada salida
-    // ponytail: cada fila parte de 0, así que en circuitos con memoria no muestra el estado guardado
+    // ponytail: cada fila parte de X, así que en circuitos con memoria muestra X y no el estado guardado
     fn tabla_de_verdad(&self, ui: &mut egui::Ui) {
         let c = paleta(ui);
         let Some(red) = &self.red else {
@@ -2089,7 +2108,7 @@ impl Interfaz {
             vacio(ui, "Con más de 8 entradas la tabla sería demasiado larga.");
             return;
         }
-        let bit = |v: bool| RichText::new(if v { "1" } else { "0" }).monospace();
+        let bit = |v: Valor| RichText::new(v.simbolo()).monospace();
         egui::Grid::new("tabla_de_verdad")
             .striped(true)
             .spacing(vec2(18.0, 3.0))
@@ -2101,17 +2120,16 @@ impl Interfaz {
                     ui.label(RichText::new(*nombre).monospace().strong().color(c.lavanda));
                 }
                 ui.end_row();
-                let mut valores = Vec::new();
                 for fila in 0..1usize << n {
                     let e = fila_de_entradas(fila, n);
-                    valores.clear();
-                    logicsm_sim::simular(red, &mut valores, &e);
+                    let mut estado = Estado::default();
+                    logicsm_sim::simular(red, &mut estado, &e);
                     for &v in &e {
-                        ui.label(bit(v));
+                        ui.label(bit(Valor::de(v)));
                     }
                     for &(i, _) in &salidas {
-                        let v = valores[i];
-                        ui.label(bit(v).color(if v { c.uno } else { c.tenue }));
+                        let v = estado.valores[i];
+                        ui.label(bit(v).color(c.de(v)));
                     }
                     ui.end_row();
                 }
@@ -2135,6 +2153,9 @@ fn capturar(ctx: &egui::Context, rect: Rect, ruta: PathBuf, envio: mpsc::Sender<
     });
     ctx.request_repaint();
 }
+
+/// Espacio libre alrededor del dibujo en el SVG
+const MARGEN_SVG: f32 = 10.0;
 
 /// Agrega `circuito1 = Circuito(entradas);` en su propia línea antes de la última `}`
 /// de `codigo`, con un nombre que el código no use. Devuelve la línea, o `None` si no
@@ -2173,9 +2194,14 @@ fn insertar_declaracion(codigo: &mut String, circuito: &str, entradas: &[&str]) 
 }
 
 /// El circuito como SVG: las figuras que egui dibujó en el lienzo, en sus coordenadas.
-/// `marco` es lo que se ve; `fondo`, el color de atrás.
+/// El marco abarca todas (cables incluidos) más `MARGEN_SVG`; `fondo` es el color de atrás.
 // ponytail: solo las figuras que usa el lienzo (rect, círculo, línea, trazo, texto de una fuente por fila)
-fn svg(figuras: &[Shape], marco: Rect, fondo: Color32) -> String {
+fn svg(figuras: &[Shape], fondo: Color32) -> String {
+    let marco = figuras
+        .iter()
+        .map(Shape::visual_bounding_rect)
+        .fold(Rect::NOTHING, Rect::union)
+        .expand(MARGEN_SVG);
     use std::fmt::Write;
     fn color(c: Color32) -> String {
         let [r, g, b, a] = c.to_srgba_unmultiplied();
@@ -2338,16 +2364,15 @@ fn tabla_csv(red: &Netlist) -> Result<String, String> {
         .collect::<Vec<_>>()
         .join(",");
     csv.push('\n');
-    let mut valores = Vec::new();
     for fila in 0..1usize << n {
         let e = fila_de_entradas(fila, n);
-        valores.clear();
-        logicsm_sim::simular(red, &mut valores, &e);
+        let mut estado = Estado::default();
+        logicsm_sim::simular(red, &mut estado, &e);
         let bits: Vec<&str> = e
             .iter()
-            .copied()
-            .chain(salidas.iter().map(|&(i, _)| valores[i]))
-            .map(|v| if v { "1" } else { "0" })
+            .map(|&v| Valor::de(v))
+            .chain(salidas.iter().map(|&(i, _)| estado.valores[i]))
+            .map(Valor::simbolo)
             .collect();
         csv.push_str(&bits.join(","));
         csv.push('\n');
@@ -2361,7 +2386,7 @@ fn columnas_de_tabla(red: &Netlist) -> (Vec<&str>, Vec<(usize, &str)>) {
     let mut salidas = Vec::new();
     for (i, n) in red.nodos.iter().enumerate() {
         match &n.tipo {
-            Tipo::Entrada(nombre) => entradas.push(nombre.as_str()),
+            Tipo::Entrada(nombre, _) => entradas.push(nombre.as_str()),
             Tipo::Salida(nombre) => salidas.push((i, nombre.as_str())),
             _ => {}
         }
@@ -2381,10 +2406,13 @@ const ALTO_FILA: f32 = 64.0;
 
 fn tamano(n: &Nodo) -> Vec2 {
     match n.tipo {
-        Tipo::Compuerta(_) => vec2(46.0, (n.entradas.len() as f32 * 14.0 + 8.0).max(36.0)),
-        Tipo::Entrada(_) => vec2(30.0, 24.0),
+        Tipo::Compuerta(_) | Tipo::Memoria { .. } => {
+            vec2(46.0, (n.entradas.len() as f32 * 14.0 + 8.0).max(36.0))
+        }
+        Tipo::Entrada(..) => vec2(30.0, 24.0),
         Tipo::Constante(_) => vec2(22.0, 22.0),
-        Tipo::Salida(_) => vec2(24.0, 24.0),
+        Tipo::Salida(_) | Tipo::Visor(..) => vec2(24.0, 24.0),
+        Tipo::Bus => vec2(10.0, 10.0),
     }
 }
 
@@ -2483,7 +2511,9 @@ fn contorno(c: Compuerta, r: Rect) -> Vec<Pos2> {
                 .chain(curva(punta, pos2(l + w * 0.6, t), pos2(l, t)))
                 .collect()
         }
-        Compuerta::Not | Compuerta::Buffer => vec![pos2(l, t), pos2(l + w, cy), pos2(l, b)],
+        Compuerta::Not | Compuerta::Buffer | Compuerta::Tristate => {
+            vec![pos2(l, t), pos2(l + w, cy), pos2(l, b)]
+        }
     }
 }
 
@@ -2502,8 +2532,9 @@ fn clave(red: &Netlist, pieza: Pieza) -> String {
         Pieza::Nodo(i) => {
             let n = &red.nodos[i];
             match &n.tipo {
-                Tipo::Entrada(x) => format!("in {x}"),
+                Tipo::Entrada(x, _) => format!("in {x}"),
                 Tipo::Salida(x) => format!("out {x}"),
+                Tipo::Visor(_, x) => format!("visor {x}"),
                 _ if !n.nombre.is_empty() => format!("= {}", n.nombre),
                 // ponytail: las anidadas se ubican por posición; si cambia el código pueden saltar
                 _ => format!("#{i}"),
@@ -2526,11 +2557,19 @@ fn descripcion(red: &Netlist, pieza: Pieza) -> String {
         Pieza::Nodo(i) => {
             let n = &red.nodos[i];
             match &n.tipo {
-                Tipo::Entrada(x) => format!("Entrada {x} (click para cambiarla)"),
+                Tipo::Entrada(x, Clase::Interruptor) => {
+                    format!("Entrada {x} (click para cambiarla)")
+                }
+                // ponytail: pulsador y reloj se cambian con click hasta que llegue el reloj del sistema
+                Tipo::Entrada(x, Clase::Pulsador) => format!("Pulsador {x} (click para cambiarlo)"),
+                Tipo::Entrada(x, Clase::Reloj) => format!("Reloj {x} (click para cambiarlo)"),
                 Tipo::Salida(x) => format!("Salida {x}"),
                 Tipo::Constante(v) => format!("Constante {}", *v as u8),
                 Tipo::Compuerta(g) if n.nombre.is_empty() => g.nombre().to_uppercase(),
                 Tipo::Compuerta(g) => format!("{} = {}", n.nombre, g.nombre().to_uppercase()),
+                Tipo::Bus => format!("{}: varios tristate", n.nombre),
+                Tipo::Visor(v, x) => format!("{} {x}", v.nombre()),
+                Tipo::Memoria { bit, .. } => format!("Memoria, bit {bit}"),
             }
         }
     }
@@ -2574,7 +2613,7 @@ fn altura_pin(r: Rect, k: usize, n: usize) -> f32 {
 fn dibujar(
     ui: &mut egui::Ui,
     red: &Netlist,
-    valores: &[bool],
+    valores: &[Valor],
     entradas: &mut [bool],
     posiciones: &mut Posiciones,
 ) -> Dibujo {
@@ -2681,7 +2720,7 @@ fn dibujar(
             centros[j] += r.drag_delta();
             posiciones.insert(clave, [centros[j].x, centros[j].y]);
         }
-        if matches!(pieza, Pieza::Nodo(i) if matches!(red.nodos[i].tipo, Tipo::Entrada(_))) {
+        if matches!(pieza, Pieza::Nodo(i) if matches!(red.nodos[i].tipo, Tipo::Entrada(..))) {
             if r.clicked() {
                 entradas[k] = !entradas[k];
             }
@@ -2692,8 +2731,14 @@ fn dibujar(
     }
 
     let caja = |j: usize| Rect::from_center_size(centros[j], tam(piezas[j]));
-    let valor = |i: usize| valores.get(i).copied().unwrap_or(false);
-    let color = |v: bool| if v { c.uno } else { c.tenue };
+    let valor = |i: usize| valores.get(i).copied().unwrap_or_default();
+    let color = |v: Valor| c.de(v);
+    // Relleno de entradas, salidas y LEDs: verde en 1, rojo en X
+    let relleno = |v: Valor| match v {
+        Valor::Uno => c.uno,
+        Valor::X => c.error,
+        _ => c.panel,
+    };
 
     // Dónde sale la señal del nodo `f`: de su pieza o del pin de la caja que lo tiene
     let pin_salida = |f: usize| {
@@ -2839,10 +2884,9 @@ fn dibujar(
         };
         let v = valor(i);
         match &red.nodos[i].tipo {
-            Tipo::Entrada(nombre) => {
-                let fondo = if v { c.uno } else { c.panel };
-                p.rect(r, 5.0, fondo, trazo, StrokeKind::Inside);
-                texto(r.center(), Align2::CENTER_CENTER, if v { "1" } else { "0" });
+            Tipo::Entrada(nombre, _) => {
+                p.rect(r, 5.0, relleno(v), trazo, StrokeKind::Inside);
+                texto(r.center(), Align2::CENTER_CENTER, v.simbolo());
                 texto(
                     r.left_center() - vec2(8.0, 0.0),
                     Align2::RIGHT_CENTER,
@@ -2858,13 +2902,33 @@ fn dibujar(
                 );
             }
             Tipo::Salida(nombre) => {
-                let fondo = if v { c.uno } else { c.panel };
-                p.circle(r.center(), r.width() / 2.0, fondo, trazo);
+                p.circle(r.center(), r.width() / 2.0, relleno(v), trazo);
                 texto(
                     r.right_center() + vec2(8.0, 0.0),
                     Align2::LEFT_CENTER,
                     nombre,
                 );
+            }
+            // Solo el LED va suelto: los demás visores son cajas
+            Tipo::Visor(_, nombre) => {
+                let v = red.nodos[i]
+                    .entradas
+                    .first()
+                    .map_or(Valor::X, |&e| valor(e));
+                p.circle(r.center(), r.width() / 2.0, relleno(v), trazo);
+                p.circle_stroke(r.center(), r.width() / 2.0 - 4.0, Stroke::new(1.0, c.tenue));
+                texto(
+                    r.right_center() + vec2(8.0, 0.0),
+                    Align2::LEFT_CENTER,
+                    nombre,
+                );
+            }
+            Tipo::Bus => {
+                p.circle_filled(r.center(), r.width() / 2.0, color(v));
+            }
+            // Siempre va dentro de su caja
+            Tipo::Memoria { .. } => {
+                p.rect(r, 3.0, c.panel, trazo, StrokeKind::Inside);
             }
             Tipo::Compuerta(g) => {
                 p.add(Shape::closed_line(contorno(*g, r), trazo));
@@ -3065,12 +3129,12 @@ mod pruebas {
             ),
             Shape::circle_filled(pos2(1.0, 2.0), 3.0, Color32::TRANSPARENT),
         ];
-        let s = svg(
-            &figuras,
-            Rect::from_min_size(pos2(-5.0, -5.0), vec2(20.0, 20.0)),
-            Color32::WHITE,
-        );
-        assert!(s.starts_with(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="-5 -5 20 20""#));
+        let s = svg(&figuras, Color32::WHITE);
+        // Rect 0..10 × 0..5 y la línea (con medio trazo) desde -0.5, más 10 de margen;
+        // el círculo transparente no cuenta
+        assert!(s.starts_with(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="-10.5 -10.5 30.5 25.5""#
+        ));
         assert!(s.contains(
             r#"<rect x="0" y="0" width="10" height="5" rx="2" fill="rgba(255,0,0,1.000)"/>"#
         ));

@@ -1,9 +1,9 @@
 //! Parser: tokens → AST. Descenso recursivo escrito a mano.
 //!
-//! ponytail: por ahora `circuit`/`main`, `in`, `out`, compuertas (`X = and(A, not(B));`),
+//! `circuit`/`main`, `in`, `out`, `button`, `clock`, compuertas (`X = and(A, not(B));`),
 //! circuitos propios (`m = MedioSumador(A, B);`, `m.Suma`), buses (`A[8]`, `A[i]`,
-//! `A[0..3]`, `split(...)`), arreglos de instancias (`FullAdder fa[8];`) y `for`.
-//! Dispositivos y memorias dan error "todavía no".
+//! `A[0..3]`, `split(...)`), arreglos de instancias (`FullAdder fa[8];`), `for`,
+//! dispositivos de salida (`led L(Q);`) y moldes de memoria (`R = rom.size(4, 8, "...");`).
 
 use crate::lexer::{Reservada, Tipo, Token, tokenizar};
 use crate::{Compuerta, Error};
@@ -28,6 +28,53 @@ pub struct Nombre {
 pub struct Puerto {
     pub nombre: Nombre,
     pub ancho: Option<usize>,
+    /// Solo en las entradas: `in`, `button` o `clock`
+    pub clase: Clase,
+}
+
+/// Cómo se maneja una entrada del circuito que se simula. Dentro de otro
+/// circuito las tres son pines normales.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Clase {
+    /// `in A;`: un click la cambia y se queda
+    #[default]
+    Interruptor,
+    /// `button B;`: vale 1 mientras se mantiene presionado
+    Pulsador,
+    /// `clock CLK;`: alterna sola con la frecuencia del sistema
+    Reloj,
+}
+
+/// Dispositivos que muestran señales: `led L(Q);`, `display7 D(...);`,
+/// `matrix M(filas, columnas, ...);`, `probe P(...);`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Visor {
+    Led,
+    Display7,
+    /// Filas y columnas
+    Matrix(usize, usize),
+    Probe,
+}
+
+impl Visor {
+    pub fn nombre(self) -> &'static str {
+        match self {
+            Visor::Led => "led",
+            Visor::Display7 => "display7",
+            Visor::Matrix(..) => "matrix",
+            Visor::Probe => "probe",
+        }
+    }
+}
+
+/// `rom.size(4, 8, "00 1F ...")` o `ram.size(4, 8)`: bits de dirección y de dato.
+/// Los datos de la ROM van en hexadecimal desde la dirección 0; lo que falta vale 0.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Molde {
+    pub ram: bool,
+    pub direccion: usize,
+    pub dato: usize,
+    pub datos: Vec<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,6 +92,12 @@ pub enum Sentencia {
         desde: IExpr,
         hasta: IExpr,
         cuerpo: Vec<Sentencia>,
+    },
+    /// `led L(Q);`
+    Visor {
+        tipo: Visor,
+        nombre: Nombre,
+        senales: Vec<Expr>,
     },
 }
 
@@ -90,6 +143,8 @@ pub enum Expr {
     /// `split.izquierda(a, b, c)` junta pines en un bus (entran por la izquierda).
     /// El primer pin es el bit 0 (como en LogicCircuit). El `bool` es `true` si separa.
     Split(bool, Vec<Expr>, Range<usize>),
+    /// `rom.size(...)` / `ram.size(...)`: se guarda en un nombre y se usa con `R(dir)`
+    Molde(Molde, Range<usize>),
 }
 
 impl Circuito {
@@ -101,7 +156,7 @@ impl Circuito {
                     Sentencia::Asignar(_, Expr::Instancia(n, _)) => v.push(&n.texto),
                     Sentencia::Arreglo { circuito, .. } => v.push(&circuito.texto),
                     Sentencia::For { cuerpo, .. } => juntar(cuerpo, v),
-                    Sentencia::Asignar(..) => {}
+                    Sentencia::Asignar(..) | Sentencia::Visor { .. } => {}
                 }
             }
         }
@@ -123,8 +178,32 @@ pub fn parsear(fuente: &str) -> Result<Vec<Circuito>, Vec<Error>> {
         i: 0,
     };
     let mut circuitos = Vec::new();
+    let mut moldes = Vec::new();
     while p.actual().tipo != Tipo::Fin {
-        circuitos.push(p.circuito().map_err(|e| vec![e])?);
+        if matches!(p.actual().tipo, Tipo::Ident(_)) {
+            moldes.push(p.molde_global().map_err(|e| vec![e])?);
+        } else {
+            circuitos.push(p.circuito().map_err(|e| vec![e])?);
+        }
+    }
+    // Un molde afuera se ve en todos los circuitos del proyecto, salvo donde
+    // un nombre propio del circuito lo tapa
+    for c in &mut circuitos {
+        let propios: Vec<String> = c
+            .sentencias
+            .iter()
+            .filter_map(|s| match s {
+                Sentencia::Asignar(d, _) => Some(d.nombre.texto.clone()),
+                _ => None,
+            })
+            .collect();
+        let visibles = moldes.iter().filter(|m| match m {
+            Sentencia::Asignar(d, _) => !propios.contains(&d.nombre.texto),
+            _ => false,
+        });
+        let mut todas: Vec<Sentencia> = visibles.cloned().collect();
+        todas.append(&mut c.sentencias);
+        c.sentencias = todas;
     }
     Ok(circuitos)
 }
@@ -172,17 +251,6 @@ impl Parser<'_> {
         }
     }
 
-    fn todavia_no(&self) -> Error {
-        let t = self.actual();
-        Error {
-            mensaje: format!(
-                "`{}` todavía no está disponible en esta versión",
-                &self.fuente[t.rango.clone()]
-            ),
-            rango: t.rango.clone(),
-        }
-    }
-
     fn esperar(&mut self, tipo: Tipo, esperado: &str) -> Result<Token, Error> {
         if self.actual().tipo == tipo {
             Ok(self.avanzar())
@@ -200,6 +268,20 @@ impl Parser<'_> {
             }
             _ => Err(self.error("un nombre")),
         }
+    }
+
+    /// `R = rom.size(...);` fuera de los circuitos
+    fn molde_global(&mut self) -> Result<Sentencia, Error> {
+        let inicio = self.actual().rango.clone();
+        let s = self.sentencia()?;
+        let molde = matches!(&s, Sentencia::Asignar(d, Expr::Molde(..)) if d.indice.is_none() && d.miembro.is_none());
+        if molde {
+            return Ok(s);
+        }
+        Err(Error {
+            mensaje: "fuera de un circuito solo van moldes de memoria, como `R = ram.size(4, 8);`; lo demás va dentro de `circuit Nombre { ... }`".into(),
+            rango: inicio,
+        })
     }
 
     /// `circuit Nombre { ... }` o `main { ... }`
@@ -230,11 +312,19 @@ impl Parser<'_> {
                 }
                 Tipo::Reservada(Reservada::In) => {
                     self.avanzar();
-                    c.entradas.extend(self.puertos()?);
+                    c.entradas.extend(self.puertos(Clase::Interruptor)?);
+                }
+                Tipo::Reservada(Reservada::Button) => {
+                    self.avanzar();
+                    c.entradas.extend(self.puertos(Clase::Pulsador)?);
+                }
+                Tipo::Reservada(Reservada::Clock) => {
+                    self.avanzar();
+                    c.entradas.extend(self.puertos(Clase::Reloj)?);
                 }
                 Tipo::Reservada(Reservada::Out) => {
                     self.avanzar();
-                    c.salidas.extend(self.puertos()?);
+                    c.salidas.extend(self.puertos(Clase::Interruptor)?);
                 }
                 _ => c.sentencias.push(self.sentencia()?),
             }
@@ -266,8 +356,69 @@ impl Parser<'_> {
                 self.esperar(Tipo::PuntoComa, "`;`")?;
                 Ok(Sentencia::Asignar(destino, valor))
             }
-            Tipo::Reservada(_) => Err(self.todavia_no()),
+            Tipo::Reservada(
+                Reservada::Led | Reservada::Display7 | Reservada::Matrix | Reservada::Probe,
+            ) => self.visor(),
             _ => Err(self.error("una declaración o `}`")),
+        }
+    }
+
+    /// `led L(Q);`, `display7 D(...);`, `matrix M(8, 8, ...);`, `probe P(...);`
+    fn visor(&mut self) -> Result<Sentencia, Error> {
+        let palabra = self.avanzar();
+        let nombre = self.nombre()?;
+        let (tipo, senales) = match palabra.tipo {
+            Tipo::Reservada(Reservada::Matrix) => {
+                self.esperar(Tipo::ParAbre, "`(` con las filas y columnas")?;
+                let filas = self.entero(1, 64, "la cantidad de filas")?;
+                self.esperar(Tipo::Coma, "`,`")?;
+                let columnas = self.entero(1, 64, "la cantidad de columnas")?;
+                self.esperar(Tipo::Coma, "`,` y las señales de las filas y columnas")?;
+                let mut senales = vec![self.expr()?];
+                while self.tomar(Tipo::Coma) {
+                    senales.push(self.expr()?);
+                }
+                self.esperar(Tipo::ParCierra, "`,` o `)`")?;
+                (Visor::Matrix(filas, columnas), senales)
+            }
+            Tipo::Reservada(r) => {
+                let tipo = match r {
+                    Reservada::Led => Visor::Led,
+                    Reservada::Display7 => Visor::Display7,
+                    _ => Visor::Probe,
+                };
+                let (senales, cierre) = self.argumentos()?;
+                if tipo == Visor::Led && senales.len() != 1 {
+                    return Err(Error {
+                        mensaje: "`led` muestra una señal: `led L(Q);`".into(),
+                        rango: palabra.rango.start..cierre.rango.end,
+                    });
+                }
+                (tipo, senales)
+            }
+            _ => unreachable!("visor() se llama con un dispositivo"),
+        };
+        self.esperar(Tipo::PuntoComa, "`;`")?;
+        Ok(Sentencia::Visor {
+            tipo,
+            nombre,
+            senales,
+        })
+    }
+
+    /// Un número entero entre `min` y `max`
+    fn entero(&mut self, min: usize, max: usize, que: &str) -> Result<usize, Error> {
+        let t = self.actual().clone();
+        match t.tipo {
+            Tipo::Entero(n) if (min as u64..=max as u64).contains(&n) => {
+                self.avanzar();
+                Ok(n as usize)
+            }
+            Tipo::Entero(n) => Err(Error {
+                mensaje: format!("se esperaba {que} de {min} a {max}, pero hay `{n}`"),
+                rango: t.rango,
+            }),
+            _ => Err(self.error(que)),
         }
     }
 
@@ -289,13 +440,24 @@ impl Parser<'_> {
         self.esperar(Tipo::LlaveAbre, "`{`")?;
         let mut cuerpo = Vec::new();
         while !self.tomar(Tipo::LlaveCierra) {
-            if matches!(
-                self.actual().tipo,
-                Tipo::Reservada(Reservada::In | Reservada::Out)
-            ) {
+            if let Tipo::Reservada(
+                Reservada::In
+                | Reservada::Out
+                | Reservada::Button
+                | Reservada::Clock
+                | Reservada::Led
+                | Reservada::Display7
+                | Reservada::Matrix
+                | Reservada::Probe,
+            ) = self.actual().tipo
+            {
+                let t = self.actual();
                 return Err(Error {
-                    mensaje: "`in` y `out` no van dentro de un `for`".into(),
-                    rango: self.actual().rango.clone(),
+                    mensaje: format!(
+                        "`{}` no va dentro de un `for`",
+                        &self.fuente[t.rango.clone()]
+                    ),
+                    rango: t.rango.clone(),
                 });
             }
             cuerpo.push(self.sentencia()?);
@@ -324,7 +486,7 @@ impl Parser<'_> {
     }
 
     /// `A, B[8], C;`
-    fn puertos(&mut self) -> Result<Vec<Puerto>, Error> {
+    fn puertos(&mut self, clase: Clase) -> Result<Vec<Puerto>, Error> {
         let mut puertos = Vec::new();
         loop {
             let nombre = self.nombre()?;
@@ -346,7 +508,11 @@ impl Parser<'_> {
                 }
                 self.esperar(Tipo::CorCierra, "`]`")?;
             }
-            puertos.push(Puerto { nombre, ancho });
+            puertos.push(Puerto {
+                nombre,
+                ancho,
+                clase,
+            });
             if !self.tomar(Tipo::Coma) {
                 break;
             }
@@ -467,6 +633,69 @@ impl Parser<'_> {
                 }
                 Ok(Expr::Split(separa, partes, rango))
             }
+            Tipo::Reservada(r @ (Reservada::Rom | Reservada::Ram)) => {
+                self.avanzar();
+                let ram = r == Reservada::Ram;
+                let pista = if ram {
+                    "`.size(bits de dirección, bits de dato)`"
+                } else {
+                    "`.size(bits de dirección, bits de dato, \"datos en hexadecimal\")`"
+                };
+                if !self.tomar(Tipo::Punto) {
+                    return Err(self.error(pista));
+                }
+                let size = self.nombre().map_err(|_| self.error(pista))?;
+                if size.texto != "size" {
+                    return Err(Error {
+                        mensaje: format!("se esperaba {pista}, pero hay `{}`", size.texto),
+                        rango: size.rango,
+                    });
+                }
+                self.esperar(Tipo::ParAbre, "`(`")?;
+                let direccion = self.entero(1, 16, "los bits de dirección")?;
+                self.esperar(Tipo::Coma, "`,`")?;
+                let dato = self.entero(1, 64, "los bits de dato")?;
+                let mut datos = Vec::new();
+                if !ram && self.tomar(Tipo::Coma) {
+                    let d = self.actual().clone();
+                    let Tipo::Texto(texto) = &d.tipo else {
+                        return Err(self.error("los datos entre comillas, como `\"00 1F A3\"`"));
+                    };
+                    self.avanzar();
+                    for palabra in texto.split_whitespace() {
+                        let v = u64::from_str_radix(palabra, 16)
+                            .ok()
+                            .filter(|&v| dato == 64 || v >> dato == 0);
+                        let Some(v) = v else {
+                            return Err(Error {
+                                mensaje: format!(
+                                    "`{palabra}` no es un dato de {dato} bits en hexadecimal"
+                                ),
+                                rango: d.rango.clone(),
+                            });
+                        };
+                        datos.push(v);
+                    }
+                    if datos.len() > 1 << direccion {
+                        return Err(Error {
+                            mensaje: format!(
+                                "la ROM tiene {} direcciones, pero hay {} datos",
+                                1 << direccion,
+                                datos.len()
+                            ),
+                            rango: d.rango.clone(),
+                        });
+                    }
+                }
+                let cierre = self.esperar(Tipo::ParCierra, "`)`")?;
+                let molde = Molde {
+                    ram,
+                    direccion,
+                    dato,
+                    datos,
+                };
+                Ok(Expr::Molde(molde, t.rango.start..cierre.rango.end))
+            }
             Tipo::Entero(v @ (0 | 1)) => {
                 self.avanzar();
                 Ok(Expr::Constante(v == 1))
@@ -479,13 +708,14 @@ impl Parser<'_> {
                 let fuente = self.fuente;
                 let texto = &fuente[t.rango.clone()];
                 let Some(compuerta) = Compuerta::desde_nombre(texto) else {
-                    return Err(self.todavia_no());
+                    return Err(self.error("una señal, `0`, `1` o una compuerta"));
                 };
                 self.avanzar();
                 let (args, cierre) = self.argumentos()?;
                 if !compuerta.entradas_validas(args.len()) {
                     let cuantas = match compuerta {
                         Compuerta::Not | Compuerta::Buffer => "1 entrada",
+                        Compuerta::Tristate => "2 entradas (dato, habilitar)",
                         _ => "2 o más entradas",
                     };
                     return Err(Error {
@@ -605,8 +835,36 @@ mod tests {
             "como señal solo se puede usar `0` o `1`"
         );
         assert_eq!(
-            error("main { led L(A); }"),
-            "`led` todavía no está disponible en esta versión"
+            error("main { led L(A, B); }"),
+            "`led` muestra una señal: `led L(Q);`"
+        );
+        assert_eq!(
+            error("main { X = tristate(A); }"),
+            "`tristate` lleva 2 entradas (dato, habilitar), pero tiene 1"
+        );
+        assert_eq!(
+            error("main { R = rom.size(4, 4, \"1F\"); }"),
+            "`1F` no es un dato de 4 bits en hexadecimal"
+        );
+        assert_eq!(
+            error("main { R = rom.size(1, 8, \"1 2 3\"); }"),
+            "la ROM tiene 2 direcciones, pero hay 3 datos"
+        );
+        assert_eq!(
+            error("main { M = ram.size(20, 8); }"),
+            "se esperaba los bits de dirección de 1 a 16, pero hay `20`"
+        );
+        assert_eq!(
+            error("main { M = ram.tamano(2, 8); }"),
+            "se esperaba `.size(bits de dirección, bits de dato)`, pero hay `tamano`"
+        );
+        assert_eq!(
+            error("X = and(A, B); main { }"),
+            "fuera de un circuito solo van moldes de memoria, como `R = ram.size(4, 8);`; lo demás va dentro de `circuit Nombre { ... }`"
+        );
+        assert_eq!(
+            error("main { for (i = 0; i < 2; i++) { led L(A); } }"),
+            "`led` no va dentro de un `for`"
         );
         assert_eq!(error("main { in A[0]; }"), "un bus tiene de 1 a 64 bits");
         assert_eq!(
@@ -624,7 +882,49 @@ mod tests {
         );
         assert_eq!(
             error("main { for (i = 0; i < 8; i++) { in A; } }"),
-            "`in` y `out` no van dentro de un `for`"
+            "`in` no va dentro de un `for`"
         );
+    }
+
+    #[test]
+    fn dispositivos_y_memorias() {
+        let c = &parsear(
+            "R = rom.size(2, 4, \"0 1 F\");
+             main { in A; button B; clock CLK; out X;
+                 led L(A); matrix M(2, 3, F, C); display7 D(S);
+                 M2 = ram.size(3, 8); X = tristate(A, B); }
+             circuit Otro { R = 1; }",
+        )
+        .unwrap();
+        let main = &c[0];
+        let clases: Vec<Clase> = main.entradas.iter().map(|p| p.clase).collect();
+        assert_eq!(clases, [Clase::Interruptor, Clase::Pulsador, Clase::Reloj]);
+        // El molde de afuera queda al principio de cada circuito que no lo tapa
+        let Expr::Molde(rom, _) = asignacion(&main.sentencias[0]).1 else {
+            panic!("se esperaba el molde de la ROM");
+        };
+        assert_eq!((rom.ram, rom.direccion, rom.dato), (false, 2, 4));
+        assert_eq!(rom.datos, [0, 1, 15]);
+        assert!(matches!(
+            &main.sentencias[2],
+            Sentencia::Visor { tipo: Visor::Matrix(2, 3), senales, .. } if senales.len() == 2
+        ));
+        assert!(matches!(
+            asignacion(&main.sentencias[4]).1,
+            Expr::Molde(
+                Molde {
+                    ram: true,
+                    direccion: 3,
+                    dato: 8,
+                    ..
+                },
+                _
+            )
+        ));
+        assert!(matches!(
+            asignacion(&main.sentencias[5]).1,
+            Expr::Compuerta(Compuerta::Tristate, _)
+        ));
+        assert_eq!(c[1].sentencias.len(), 1);
     }
 }

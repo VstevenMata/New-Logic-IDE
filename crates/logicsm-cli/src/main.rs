@@ -1,6 +1,6 @@
 //! Herramienta de desarrollo: prueba las compuertas predefinidas, por ejemplo `logicsm-cli and 3`.
 
-use logicsm_sim::Compuerta;
+use logicsm_sim::{Compuerta, Valor};
 use std::io::IsTerminal;
 use std::process::ExitCode;
 
@@ -35,9 +35,10 @@ fn ejecutar(args: Vec<String>) -> Result<(), String> {
             .map_err(|_| format!("«{s}» no es una cantidad de entradas"))?,
     };
     if !compuerta.entradas_validas(n) {
-        return Err(match n {
-            1 => format!("{nombre} necesita al menos 2 entradas"),
-            _ => format!("{nombre} tiene siempre 1 entrada"),
+        return Err(match compuerta {
+            Compuerta::Not | Compuerta::Buffer => format!("{nombre} tiene siempre 1 entrada"),
+            Compuerta::Tristate => format!("{nombre} tiene siempre 2 entradas (dato, habilitar)"),
+            _ => format!("{nombre} necesita al menos 2 entradas"),
         });
     }
     if n > MAX_ENTRADAS {
@@ -52,11 +53,10 @@ fn ejecutar(args: Vec<String>) -> Result<(), String> {
 
 fn tabla(compuerta: Compuerta, n: usize) {
     let color = std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
-    let bit = |b: bool| match (color, b) {
-        (true, true) => "\x1b[1;32m1\x1b[0m",
-        (true, false) => "\x1b[2m0\x1b[0m",
-        (false, true) => "1",
-        (false, false) => "0",
+    let bit = |v: Valor| match (color, v) {
+        (true, Valor::Uno) => "\x1b[1;32m1\x1b[0m",
+        (true, Valor::Cero) => "\x1b[2m0\x1b[0m",
+        _ => v.simbolo(),
     };
     let letras: Vec<char> = ('A'..).take(n).collect();
     let entradas = if n == 1 { "entrada" } else { "entradas" };
@@ -69,7 +69,9 @@ fn tabla(compuerta: Compuerta, n: usize) {
     println!("  {cabecera}│ Y");
     println!("  {}┼───", "─".repeat(n * 3));
     for fila in 0..1u32 << n {
-        let valores: Vec<bool> = (0..n).map(|i| fila >> (n - 1 - i) & 1 == 1).collect();
+        let valores: Vec<Valor> = (0..n)
+            .map(|i| Valor::de(fila >> (n - 1 - i) & 1 == 1))
+            .collect();
         let celdas: String = valores.iter().map(|&v| format!(" {} ", bit(v))).collect();
         println!("  {celdas}│ {}", bit(compuerta.evaluar(&valores)));
     }
@@ -85,6 +87,7 @@ uso: logicsm-cli <compuerta> [entradas]
 compuertas:
   and, or, xor, nand, nor, xnor   de 2 a {MAX_ENTRADAS} entradas (por defecto 2)
   not, buffer                     1 entrada
+  tristate                        2 entradas: dato y habilitar (sin habilitar da Z)
 
 ejemplos:
   logicsm-cli and 3

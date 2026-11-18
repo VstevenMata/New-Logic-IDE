@@ -5,7 +5,7 @@ pub mod lexer;
 pub mod netlist;
 pub mod parser;
 
-pub use compuerta::Compuerta;
+pub use compuerta::{Compuerta, Valor};
 pub use netlist::Netlist;
 
 use parser::Circuito;

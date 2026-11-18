@@ -6,16 +6,27 @@
 //! señales de un bit.
 
 use crate::parser::{Acceso, Circuito, Expr, IExpr, Indice, Nombre, Puerto, Sentencia, Termino};
+pub use crate::parser::{Clase, Molde, Visor};
 use crate::{Compuerta, Error};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Tipo {
-    Entrada(String),
+    Entrada(String, Clase),
     Salida(String),
     Constante(bool),
     Compuerta(Compuerta),
+    /// Varios `tristate` asignados a la misma señal: vale lo que dé el que no está en Z
+    Bus,
+    /// `led L(Q);` y los demás: muestran sus entradas y no dan ninguna señal
+    Visor(Visor, String),
+    /// Un bit del dato que lee una memoria (en `Netlist::memorias`). Sus entradas son
+    /// la dirección y, si es RAM, el dato, `escribir` y el reloj.
+    Memoria {
+        memoria: usize,
+        bit: usize,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,6 +67,8 @@ pub struct Netlist {
     pub nombre: String,
     pub nodos: Vec<Nodo>,
     pub instancias: Vec<Instancia>,
+    /// Cada `R(dir)` es una memoria nueva, con su copia del molde
+    pub memorias: Vec<Molde>,
 }
 
 /// De dónde sale un bit mientras se elabora. Los nombres se resuelven al
@@ -85,6 +98,10 @@ struct Ambito<'a> {
     arreglos: HashMap<String, usize>,
     /// Instancia ya copiada → su ámbito
     instancias: HashMap<String, usize>,
+    /// `R = rom.size(...);` → el molde
+    moldes: HashMap<String, &'a Molde>,
+    /// Nombres de los `led`, `display7`...
+    visores: HashSet<String>,
 }
 
 struct Elaborador<'a> {
@@ -98,8 +115,9 @@ struct Elaborador<'a> {
     pila: Vec<&'a str>,
     /// Instancia del principal que se está copiando
     actual: Option<usize>,
-    /// Cajas del principal (instancias y `split`), con sus pines sin resolver
+    /// Cajas del principal (instancias, `split`, memorias y visores), con sus pines sin resolver
     instancias: Vec<Caja>,
+    memorias: Vec<Molde>,
 }
 
 struct Caja {
@@ -217,12 +235,21 @@ fn elegir(
         .collect())
 }
 
+/// Cómo se usa una memoria: `R(dirección)` o `M(dirección, dato, escribir, reloj)`
+fn uso(m: &Molde) -> &'static str {
+    if m.ram {
+        "dirección, dato, escribir, reloj"
+    } else {
+        "dirección"
+    }
+}
+
 /// Algún nombre dentro de la expresión, para ubicar un error
 fn rango_de(e: &Expr) -> Range<usize> {
     match e {
         Expr::Senal(a) => a.nombre.rango.clone(),
         Expr::Instancia(n, _) => n.rango.clone(),
-        Expr::Split(_, _, rango) => rango.clone(),
+        Expr::Split(_, _, rango) | Expr::Molde(_, rango) => rango.clone(),
         Expr::Compuerta(_, partes) => partes
             .iter()
             .map(rango_de)
@@ -243,6 +270,7 @@ pub fn elaborar(principal: &Circuito, circuitos: &[Circuito]) -> Result<Netlist,
         pila: Vec::new(),
         actual: None,
         instancias: Vec::new(),
+        memorias: Vec::new(),
     };
     for c in circuitos {
         if e.circuitos.insert(&c.nombre.texto, c).is_some() {
@@ -303,6 +331,7 @@ pub fn elaborar(principal: &Circuito, circuitos: &[Circuito]) -> Result<Netlist,
             nombre: principal.nombre.texto.clone(),
             nodos: e.nodos,
             instancias,
+            memorias: e.memorias,
         })
     } else {
         Err(e.errores)
@@ -319,7 +348,7 @@ impl<'a> Elaborador<'a> {
 
     fn nodo(&mut self, tipo: Tipo, fuentes: Vec<Ref>) -> usize {
         let nombre = match &tipo {
-            Tipo::Entrada(n) | Tipo::Salida(n) => n.clone(),
+            Tipo::Entrada(n, _) | Tipo::Salida(n) | Tipo::Visor(_, n) => n.clone(),
             _ => String::new(),
         };
         self.nodos.push(Nodo {
@@ -362,6 +391,8 @@ impl<'a> Elaborador<'a> {
             tipos: HashMap::new(),
             arreglos: HashMap::new(),
             instancias: HashMap::new(),
+            moldes: HashMap::new(),
+            visores: HashSet::new(),
         });
         self.pila.push(&c.nombre.texto);
 
@@ -380,7 +411,7 @@ impl<'a> Elaborador<'a> {
             for b in bs {
                 let r = match &entradas {
                     Some(refs) => refs[k].clone(),
-                    None => Ref::Nodo(self.nodo(Tipo::Entrada(b.clone()), Vec::new())),
+                    None => Ref::Nodo(self.nodo(Tipo::Entrada(b.clone(), p.clase), Vec::new())),
                 };
                 k += 1;
                 self.ambitos[id].senales.insert(b, r);
@@ -399,16 +430,29 @@ impl<'a> Elaborador<'a> {
 
         let mut planas = Vec::new();
         self.desenrollar(&c.sentencias, &mut Vec::new(), &mut planas);
+        self.declarar_moldes(id, &planas);
         self.declarar_instancias(id, &planas);
         self.inferir_anchos(id, &planas);
         // Una asignación con error no repite el aviso de "nunca recibe un valor"
-        let mut fallidas = std::collections::HashSet::new();
+        let mut fallidas = HashSet::new();
         for (s, vars) in &planas {
-            if let Sentencia::Asignar(destino, valor) = *s
-                && let Err(err) = self.asignar(id, destino, valor, vars)
-            {
-                self.agregar(err);
-                fallidas.insert(destino.nombre.texto.as_str());
+            match *s {
+                Sentencia::Asignar(destino, valor) => {
+                    if let Err(err) = self.asignar(id, destino, valor, vars) {
+                        self.agregar(err);
+                        fallidas.insert(destino.nombre.texto.as_str());
+                    }
+                }
+                Sentencia::Visor {
+                    tipo,
+                    nombre,
+                    senales,
+                } => {
+                    if let Err(err) = self.visor(id, *tipo, nombre, senales, vars) {
+                        self.agregar(err);
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -482,6 +526,27 @@ impl<'a> Elaborador<'a> {
         }
     }
 
+    /// Anota los moldes de memoria (`R = rom.size(...);`) antes que nada: `R(dir)` se
+    /// puede usar en cualquier orden.
+    fn declarar_moldes(&mut self, id: usize, planas: &[(&'a Sentencia, Variables<'a>)]) {
+        for (s, _) in planas {
+            let Sentencia::Asignar(d, Expr::Molde(m, _)) = *s else {
+                continue;
+            };
+            let n = &d.nombre.texto;
+            let a = &self.ambitos[id];
+            let mensaje = if d.indice.is_some() || d.miembro.is_some() {
+                "un molde se guarda en un nombre simple, como `R = rom.size(...);`".to_string()
+            } else if a.moldes.contains_key(n) || a.anchos.contains_key(n) {
+                format!("`{n}` ya tiene un valor: cada nombre se usa una sola vez")
+            } else {
+                self.ambitos[id].moldes.insert(n.clone(), m);
+                continue;
+            };
+            self.agregar(error(mensaje, d.nombre.rango.clone()));
+        }
+    }
+
     /// Anota las instancias antes que nada, así se puede leer `m.Salida` en
     /// cualquier orden. Los arreglos se copian aquí mismo: sus entradas llegan
     /// después con `fa[i].A = ...`.
@@ -494,7 +559,9 @@ impl<'a> Elaborador<'a> {
                     cantidad,
                 } => (circuito, nombre, Some(cantidad)),
                 Sentencia::Asignar(d, Expr::Instancia(circuito, _))
-                    if d.indice.is_none() && d.miembro.is_none() =>
+                    if d.indice.is_none()
+                        && d.miembro.is_none()
+                        && !self.ambitos[id].moldes.contains_key(&circuito.texto) =>
                 {
                     (circuito, &d.nombre, None)
                 }
@@ -502,7 +569,11 @@ impl<'a> Elaborador<'a> {
             };
             let a = &self.ambitos[id];
             let n = &nombre.texto;
-            if a.anchos.contains_key(n) || a.tipos.contains_key(n) || a.arreglos.contains_key(n) {
+            if a.anchos.contains_key(n)
+                || a.tipos.contains_key(n)
+                || a.arreglos.contains_key(n)
+                || a.moldes.contains_key(n)
+            {
                 self.agregar(error(
                     format!("`{n}` ya tiene un valor: cada nombre se usa una sola vez"),
                     nombre.rango.clone(),
@@ -555,7 +626,8 @@ impl<'a> Elaborador<'a> {
             let a = &self.ambitos[id];
             let n = &d.nombre.texto;
             if d.miembro.is_some()
-                || matches!(valor, Expr::Instancia(..))
+                || matches!(valor, Expr::Molde(..))
+                || matches!(valor, Expr::Instancia(c, _) if !a.moldes.contains_key(&c.texto))
                 || a.tipos.contains_key(n)
                 || a.arreglos.contains_key(n)
                 || puerto(&a.circuito.entradas, n).is_some()
@@ -606,7 +678,10 @@ impl<'a> Elaborador<'a> {
     /// Cuántos bits da una expresión; `None` si usa una señal de ancho desconocido.
     fn ancho(&self, id: usize, e: &Expr, vars: &Variables, suponer: bool) -> Option<usize> {
         match e {
-            Expr::Constante(_) | Expr::Instancia(..) => Some(1),
+            Expr::Constante(_) | Expr::Molde(..) => Some(1),
+            Expr::Instancia(c, _) => {
+                Some(self.ambitos[id].moldes.get(&c.texto).map_or(1, |m| m.dato))
+            }
             Expr::Senal(a) => {
                 let ambito = &self.ambitos[id];
                 if a.miembro.is_none() && !ambito.anchos.contains_key(&a.nombre.texto) {
@@ -674,6 +749,12 @@ impl<'a> Elaborador<'a> {
         };
         match a.tipos.get(&clave) {
             Some(&c) => Ok((clave, c)),
+            None if a.anchos.contains_key(n) => Err(error(
+                format!(
+                    "`{n}` es una señal, no un circuito: úsala sin punto, como `{n}` o `{n}[0]`"
+                ),
+                nombre.rango.clone(),
+            )),
             None => Err(error(
                 format!("`{n}` no es un circuito"),
                 nombre.rango.clone(),
@@ -714,6 +795,8 @@ impl<'a> Elaborador<'a> {
         }
         let mensaje = if ambito.tipos.contains_key(n) || ambito.arreglos.contains_key(n) {
             format!("`{n}` es un circuito, no una señal: usa una de sus salidas, como `{n}.Salida`")
+        } else if let Some(m) = ambito.moldes.get(n) {
+            format!("`{n}` es un molde de memoria: úsalo con `{n}({})`", uso(m))
         } else {
             format!("`{n}` no existe: declárala con `in` o asígnale un valor")
         };
@@ -754,7 +837,8 @@ impl<'a> Elaborador<'a> {
         }
         let mensaje = if puerto(&a.circuito.entradas, n).is_some() {
             "es una entrada: no se le puede asignar un valor"
-        } else if a.tipos.contains_key(n) || a.arreglos.contains_key(n) {
+        } else if a.tipos.contains_key(n) || a.arreglos.contains_key(n) || a.moldes.contains_key(n)
+        {
             "ya tiene un valor: cada nombre se usa una sola vez"
         } else {
             let ancho = a.anchos.get(n).copied().flatten();
@@ -770,7 +854,13 @@ impl<'a> Elaborador<'a> {
         valor: &'a Expr,
         vars: &Variables<'a>,
     ) -> Result<(), Error> {
-        if let Expr::Instancia(circuito, args) = valor {
+        // Ya se anotó en `declarar_moldes`
+        if let Expr::Molde(..) = valor {
+            return Ok(());
+        }
+        if let Expr::Instancia(circuito, args) = valor
+            && !self.ambitos[id].moldes.contains_key(&circuito.texto)
+        {
             if d.indice.is_some() || d.miembro.is_some() {
                 return Err(error(
                     format!(
@@ -809,11 +899,9 @@ impl<'a> Elaborador<'a> {
             ));
         }
         for (b, r) in destinos.into_iter().zip(fuentes) {
-            if self.ambitos[id].senales.contains_key(&b) {
-                return Err(error(
-                    format!("`{b}` ya tiene un valor: cada señal se asigna una sola vez"),
-                    d.nombre.rango.clone(),
-                ));
+            if let Some(viejo) = self.ambitos[id].senales.get(&b).cloned() {
+                self.otro_conductor(id, b, viejo, r, &d.nombre.rango)?;
+                continue;
             }
             if let Ref::Nodo(i) = r
                 && i >= antes
@@ -824,6 +912,199 @@ impl<'a> Elaborador<'a> {
             self.ambitos[id].senales.insert(b, r);
         }
         Ok(())
+    }
+
+    /// Una señal que ya tiene valor solo admite más `tristate`: se juntan en un bus.
+    fn otro_conductor(
+        &mut self,
+        id: usize,
+        b: String,
+        viejo: Ref,
+        nuevo: Ref,
+        rango: &Range<usize>,
+    ) -> Result<(), Error> {
+        let tristate = |t: &Tipo| matches!(t, Tipo::Compuerta(Compuerta::Tristate));
+        let par = match (&viejo, &nuevo) {
+            (Ref::Nodo(v), Ref::Nodo(n)) => Some((*v, *n)),
+            _ => None,
+        };
+        let Some((v, _)) = par.filter(|&(_, n)| tristate(&self.nodos[n].tipo)) else {
+            return Err(error(
+                format!("`{b}` ya tiene un valor: cada señal se asigna una sola vez"),
+                rango.clone(),
+            ));
+        };
+        if self.nodos[v].tipo == Tipo::Bus {
+            self.pendientes[v].push(nuevo);
+        } else if tristate(&self.nodos[v].tipo) {
+            let bus = self.nodo(Tipo::Bus, vec![Ref::Nodo(v), nuevo]);
+            self.nodos[bus].nombre = std::mem::take(&mut self.nodos[v].nombre);
+            self.ambitos[id].senales.insert(b, Ref::Nodo(bus));
+        } else {
+            return Err(error(
+                format!(
+                    "`{b}` ya tiene un valor: solo varios `tristate` pueden manejar la misma señal"
+                ),
+                rango.clone(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// `led L(Q);`, `display7 D(...);`, `matrix M(f, c, ...);` o `probe P(...);`.
+    /// En el principal (menos el LED) se dibujan como una caja con sus pines.
+    fn visor(
+        &mut self,
+        id: usize,
+        tipo: Visor,
+        nombre: &Nombre,
+        senales: &'a [Expr],
+        vars: &Variables,
+    ) -> Result<(), Error> {
+        let n = &nombre.texto;
+        let a = &self.ambitos[id];
+        if a.anchos.contains_key(n)
+            || a.tipos.contains_key(n)
+            || a.arreglos.contains_key(n)
+            || a.moldes.contains_key(n)
+            || a.visores.contains(n)
+        {
+            return Err(error(
+                format!("`{n}` ya tiene un valor: cada nombre se usa una sola vez"),
+                nombre.rango.clone(),
+            ));
+        }
+        self.ambitos[id].visores.insert(n.clone());
+        let mut bits = Vec::new();
+        for s in senales {
+            bits.extend(self.construir(id, s, vars)?);
+        }
+        let (esperados, pines): (usize, Vec<String>) = match tipo {
+            Visor::Led => (1, vec![String::new()]),
+            Visor::Display7 => (
+                8,
+                ["a", "b", "c", "d", "e", "f", "g", "dp"]
+                    .map(String::from)
+                    .to_vec(),
+            ),
+            Visor::Matrix(f, c) => (
+                f + c,
+                (0..f)
+                    .map(|k| format!("F{k}"))
+                    .chain((0..c).map(|k| format!("C{k}")))
+                    .collect(),
+            ),
+            Visor::Probe => (bits.len(), (0..bits.len()).map(|k| k.to_string()).collect()),
+        };
+        if bits.len() != esperados {
+            let detalle = match tipo {
+                Visor::Display7 => ": a, b, c, d, e, f, g y dp".to_string(),
+                Visor::Matrix(f, c) => format!(": {f} filas y {c} columnas"),
+                _ => String::new(),
+            };
+            return Err(error(
+                format!(
+                    "`{}` lleva {}{detalle}, pero recibe {}",
+                    tipo.nombre(),
+                    en_bits(esperados),
+                    en_bits(bits.len())
+                ),
+                nombre.rango.clone(),
+            ));
+        }
+        let caja = id == 0 && tipo != Visor::Led;
+        let g = self.instancias.len();
+        if caja {
+            self.actual = Some(g);
+        }
+        self.nodo(Tipo::Visor(tipo, n.clone()), bits.clone());
+        if caja {
+            self.actual = None;
+            self.instancias.push(Caja {
+                nombre: n.clone(),
+                circuito: tipo.nombre().into(),
+                entradas: pines.into_iter().zip(bits).collect(),
+                salidas: Vec::new(),
+                split: None,
+            });
+        }
+        Ok(())
+    }
+
+    /// `R(dir)` o `M(dir, dato, escribir, reloj)`: una memoria nueva con el molde `m`.
+    /// Da los bits del dato leído.
+    fn memoria(
+        &mut self,
+        id: usize,
+        nombre: &Nombre,
+        m: &Molde,
+        args: &'a [Expr],
+        vars: &Variables,
+    ) -> Result<Vec<Ref>, Error> {
+        let mut pines = vec![("A", m.direccion, "la dirección")];
+        if m.ram {
+            pines.extend([
+                ("D", m.dato, "el dato"),
+                ("W", 1, "`escribir`"),
+                ("C", 1, "el reloj"),
+            ]);
+        }
+        let n = &nombre.texto;
+        if args.len() != pines.len() {
+            return Err(error(
+                format!("`{n}` se usa con `{n}({})`", uso(m)),
+                nombre.rango.clone(),
+            ));
+        }
+        let mut entradas = Vec::new();
+        for (&(pin, ancho, que), arg) in pines.iter().zip(args) {
+            let bits = self.construir(id, arg, vars)?;
+            if bits.len() != ancho {
+                return Err(error(
+                    format!(
+                        "{que} de `{n}` es de {}, pero recibe {}",
+                        en_bits(ancho),
+                        en_bits(bits.len())
+                    ),
+                    rango_de(arg),
+                ));
+            }
+            for (k, b) in bits.into_iter().enumerate() {
+                let pin = if ancho == 1 {
+                    pin.to_string()
+                } else {
+                    format!("{pin}{k}")
+                };
+                entradas.push((pin, b));
+            }
+        }
+        let memoria = self.memorias.len();
+        self.memorias.push(m.clone());
+        let fuentes: Vec<Ref> = entradas.iter().map(|e| e.1.clone()).collect();
+        // En el principal se dibuja como una caja con los bits del dato a la derecha
+        let caja = id == 0;
+        let g = self.instancias.len();
+        if caja {
+            self.actual = Some(g);
+        }
+        let salidas: Vec<Ref> = (0..m.dato)
+            .map(|bit| Ref::Nodo(self.nodo(Tipo::Memoria { memoria, bit }, fuentes.clone())))
+            .collect();
+        if caja {
+            self.actual = None;
+            self.instancias.push(Caja {
+                // ponytail: se ubica por orden, como el split
+                nombre: format!("{n}{g}"),
+                circuito: String::from(if m.ram { "ram" } else { "rom" }),
+                entradas,
+                salidas: (0..m.dato)
+                    .map(|k| format!("D{k}"))
+                    .zip(salidas.clone())
+                    .collect(),
+                split: None,
+            });
+        }
+        Ok(salidas)
     }
 
     /// `m = MedioSumador(A, B);` dentro del ámbito `padre`
@@ -987,12 +1268,21 @@ impl<'a> Elaborador<'a> {
                 });
                 Ok(salidas)
             }
-            Expr::Instancia(circuito, _) => Err(error(
-                format!(
-                    "`{0}(...)` crea un circuito: asígnalo a un nombre (`m = {0}(...);`) y usa sus salidas con `m.Salida`",
-                    circuito.texto
-                ),
-                circuito.rango.clone(),
+            Expr::Instancia(circuito, args) => {
+                if let Some(m) = self.ambitos[id].moldes.get(&circuito.texto).copied() {
+                    return self.memoria(id, circuito, m, args, vars);
+                }
+                Err(error(
+                    format!(
+                        "`{0}(...)` crea un circuito: asígnalo a un nombre (`m = {0}(...);`) y usa sus salidas con `m.Salida`",
+                        circuito.texto
+                    ),
+                    circuito.rango.clone(),
+                ))
+            }
+            Expr::Molde(_, rango) => Err(error(
+                "un molde de memoria se guarda en un nombre (`R = rom.size(...);`) y se usa con `R(dirección)`".into(),
+                rango.clone(),
             )),
         }
     }
@@ -1047,7 +1337,7 @@ impl<'a> Elaborador<'a> {
 #[cfg(test)]
 mod tests {
     use crate::compilar;
-    use crate::netlist::Tipo;
+    use crate::netlist::{Clase, Tipo, Visor};
 
     fn errores(fuente: &str) -> Vec<String> {
         compilar(fuente)
@@ -1184,7 +1474,7 @@ mod tests {
         let nombres: Vec<&str> = red
             .nodos
             .iter()
-            .filter(|n| matches!(n.tipo, Tipo::Entrada(_)))
+            .filter(|n| matches!(n.tipo, Tipo::Entrada(..)))
             .map(|n| n.nombre.as_str())
             .collect();
         assert_eq!(
@@ -1236,6 +1526,111 @@ mod tests {
         assert!(
             compilar("circuit T { in A[4]; out X[4]; t = not(A); u[1] = A[0]; u[0] = 1; X = split.izquierda(u, t[2..3]); }")
                 .is_ok()
+        );
+    }
+
+    #[test]
+    fn memorias_visores_y_tristate() {
+        let red = compilar(
+            "R = rom.size(2, 4, \"1 2 3 4\");
+             main { in A[2], E, D; button B; clock CLK; out X[4], Y, Q[8];
+                 X = R(A);
+                 M = ram.size(1, 8);
+                 Q = M(E, split.izquierda(D, D, D, D, D, D, D, D), B, CLK);
+                 Y = tristate(D, E); Y = tristate(B, not(E)); Y = tristate(CLK, 0);
+                 led L(Y); display7 S(X, Q[0..3]); }",
+        )
+        .unwrap();
+        let clases: Vec<Clase> = red
+            .nodos
+            .iter()
+            .filter_map(|n| match n.tipo {
+                Tipo::Entrada(_, c) => Some(c),
+                _ => None,
+            })
+            .collect();
+        use Clase::*;
+        assert_eq!(
+            clases,
+            [
+                Interruptor,
+                Interruptor,
+                Interruptor,
+                Interruptor,
+                Pulsador,
+                Reloj
+            ]
+        );
+        assert_eq!(red.memorias.len(), 2);
+        assert_eq!(red.memorias[0].datos, [1, 2, 3, 4]);
+        assert!(red.memorias[1].ram);
+        // ROM, split, RAM y display7 son cajas; el LED va suelto
+        let cajas: Vec<&str> = red.instancias.iter().map(|c| c.circuito.as_str()).collect();
+        assert_eq!(cajas, ["rom", "split", "ram", "display7"]);
+        assert_eq!(red.instancias[0].salidas.len(), 4);
+        // RAM: dirección (1) + dato (8) + escribir + reloj
+        assert_eq!(red.instancias[2].entradas.len(), 11);
+        assert_eq!(red.instancias[2].entradas[10].0, "C");
+        assert_eq!(red.instancias[3].entradas[7].0, "dp");
+        // Los tres tristate se juntan en un bus
+        let bus = red.nodos.iter().find(|n| n.tipo == Tipo::Bus).unwrap();
+        assert_eq!(bus.entradas.len(), 3);
+        assert_eq!(bus.nombre, "Y");
+        assert!(
+            red.nodos
+                .iter()
+                .any(|n| n.tipo == Tipo::Visor(Visor::Led, "L".into()) && n.instancia.is_none())
+        );
+    }
+
+    #[test]
+    fn errores_de_memorias_y_visores() {
+        let con = |cuerpo: &str| errores(&format!("main {{ in A[2], B; {cuerpo} }}"));
+        assert_eq!(
+            con("out X[4]; R = rom.size(3, 4); X = R(A);"),
+            ["la dirección de `R` es de 3 bits, pero recibe 2 bits"]
+        );
+        assert_eq!(
+            con("out X[4]; M = ram.size(2, 4); X = M(A);"),
+            ["`M` se usa con `M(dirección, dato, escribir, reloj)`"]
+        );
+        assert_eq!(
+            con("out X; R = rom.size(2, 1); X = R;"),
+            ["`R` es un molde de memoria: úsalo con `R(dirección)`"]
+        );
+        assert_eq!(
+            con("out X[8]; R = rom.size(2, 8); r = R(A); X = r.D;"),
+            ["`r` es una señal, no un circuito: úsala sin punto, como `r` o `r[0]`"]
+        );
+        assert_eq!(
+            con("out X; X = and(rom.size(2, 1), B);"),
+            [
+                "un molde de memoria se guarda en un nombre (`R = rom.size(...);`) y se usa con `R(dirección)`"
+            ]
+        );
+        assert_eq!(
+            con("display7 D(A, B);"),
+            ["`display7` lleva 8 bits: a, b, c, d, e, f, g y dp, pero recibe 3 bits"]
+        );
+        assert_eq!(
+            con("matrix M(2, 2, A, B);"),
+            ["`matrix` lleva 4 bits: 2 filas y 2 columnas, pero recibe 3 bits"]
+        );
+        assert_eq!(
+            con("led B(B);"),
+            ["`B` ya tiene un valor: cada nombre se usa una sola vez"]
+        );
+        assert_eq!(
+            con("out X; X = tristate(B, B); X = B;"),
+            ["`X` ya tiene un valor: cada señal se asigna una sola vez"]
+        );
+        assert_eq!(
+            con("out X; X = B; X = tristate(B, B);"),
+            ["`X` ya tiene un valor: cada señal se asigna una sola vez"]
+        );
+        assert_eq!(
+            con("out X; X = not(B); X = tristate(B, B);"),
+            ["`X` ya tiene un valor: solo varios `tristate` pueden manejar la misma señal"]
         );
     }
 

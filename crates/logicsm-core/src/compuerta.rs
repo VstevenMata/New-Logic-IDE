@@ -1,4 +1,42 @@
-/// Compuertas predefinidas del lenguaje (`and(A, B)`, `not(X)`…).
+/// Valor de un cable: 0, 1, X (desconocido) o Z (alta impedancia, nadie lo maneja).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Valor {
+    Cero,
+    Uno,
+    #[default]
+    X,
+    Z,
+}
+
+impl Valor {
+    pub fn de(b: bool) -> Self {
+        if b { Valor::Uno } else { Valor::Cero }
+    }
+
+    /// `Some` si es 0 o 1
+    pub fn bit(self) -> Option<bool> {
+        match self {
+            Valor::Cero => Some(false),
+            Valor::Uno => Some(true),
+            Valor::X | Valor::Z => None,
+        }
+    }
+
+    pub fn simbolo(self) -> &'static str {
+        match self {
+            Valor::Cero => "0",
+            Valor::Uno => "1",
+            Valor::X => "X",
+            Valor::Z => "Z",
+        }
+    }
+
+    fn no(self) -> Self {
+        self.bit().map_or(Valor::X, |b| Valor::de(!b))
+    }
+}
+
+/// Compuertas predefinidas del lenguaje (`and(A, B)`, `not(X)`, `tristate(D, E)`…).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Compuerta {
     And,
@@ -9,12 +47,14 @@ pub enum Compuerta {
     Xnor,
     Not,
     Buffer,
+    /// `tristate(dato, habilitar)`: deja pasar el dato si habilitar = 1; si no, da Z
+    Tristate,
 }
 
 use Compuerta::*;
 
 impl Compuerta {
-    pub const TODAS: [Compuerta; 8] = [And, Or, Xor, Nand, Nor, Xnor, Not, Buffer];
+    pub const TODAS: [Compuerta; 9] = [And, Or, Xor, Nand, Nor, Xnor, Not, Buffer, Tristate];
 
     pub fn nombre(self) -> &'static str {
         match self {
@@ -26,6 +66,7 @@ impl Compuerta {
             Xnor => "xnor",
             Not => "not",
             Buffer => "buffer",
+            Tristate => "tristate",
         }
     }
 
@@ -33,26 +74,44 @@ impl Compuerta {
         Self::TODAS.into_iter().find(|c| c.nombre() == nombre)
     }
 
-    /// `not` y `buffer` siempre tienen 1 entrada; las demás, 2 o más.
+    /// `not` y `buffer` siempre tienen 1 entrada, `tristate` 2; las demás, 2 o más.
     pub fn entradas_validas(self, n: usize) -> bool {
         match self {
             Not | Buffer => n == 1,
+            Tristate => n == 2,
             _ => n >= 2,
         }
     }
 
-    // ponytail: solo 0 y 1; X y Z llegan con el simulador por eventos
-    pub fn evaluar(self, entradas: &[bool]) -> bool {
-        let unos = entradas.iter().filter(|&&e| e).count();
+    /// Una entrada en Z se lee como X. Un 0 decide un AND y un 1 decide un OR
+    /// aunque las demás sean X.
+    pub fn evaluar(self, entradas: &[Valor]) -> Valor {
+        let bits: Option<Vec<bool>> = entradas.iter().map(|v| v.bit()).collect();
+        let hay = |b: bool| entradas.contains(&Valor::de(b));
         match self {
-            And => unos == entradas.len(),
-            Or => unos > 0,
-            Xor => unos % 2 == 1,
-            Nand => unos != entradas.len(),
-            Nor => unos == 0,
-            Xnor => unos % 2 == 0,
-            Not => unos == 0,
-            Buffer => unos == 1,
+            And => match bits {
+                _ if hay(false) => Valor::Cero,
+                Some(_) => Valor::Uno,
+                None => Valor::X,
+            },
+            Or => match bits {
+                _ if hay(true) => Valor::Uno,
+                Some(_) => Valor::Cero,
+                None => Valor::X,
+            },
+            Xor => bits.map_or(Valor::X, |b| {
+                Valor::de(b.iter().filter(|&&x| x).count() % 2 == 1)
+            }),
+            Nand => And.evaluar(entradas).no(),
+            Nor => Or.evaluar(entradas).no(),
+            Xnor => Xor.evaluar(entradas).no(),
+            Not => entradas[0].no(),
+            Buffer => entradas[0].no().no(),
+            Tristate => match entradas[1] {
+                Valor::Uno => entradas[0].no().no(),
+                Valor::Cero => Valor::Z,
+                _ => Valor::X,
+            },
         }
     }
 }
@@ -60,13 +119,16 @@ impl Compuerta {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use Valor::{Cero, Uno, X, Z};
 
     /// Salidas de la tabla de verdad, de 000… a 111… (A es el bit más significativo)
     fn tabla(c: Compuerta, n: usize) -> Vec<u8> {
         (0..1 << n)
             .map(|fila| {
-                let e: Vec<bool> = (0..n).map(|i| fila >> (n - 1 - i) & 1 == 1).collect();
-                c.evaluar(&e) as u8
+                let e: Vec<Valor> = (0..n)
+                    .map(|i| Valor::de(fila >> (n - 1 - i) & 1 == 1))
+                    .collect();
+                c.evaluar(&e).bit().unwrap() as u8
             })
             .collect()
     }
@@ -84,10 +146,24 @@ mod tests {
     }
 
     #[test]
+    fn x_y_z() {
+        assert_eq!(And.evaluar(&[Cero, X]), Cero);
+        assert_eq!(And.evaluar(&[Uno, X]), X);
+        assert_eq!(Or.evaluar(&[Uno, Z]), Uno);
+        assert_eq!(Nor.evaluar(&[Cero, X]), X);
+        assert_eq!(Xor.evaluar(&[Uno, X]), X);
+        assert_eq!(Not.evaluar(&[Z]), X);
+        assert_eq!(Tristate.evaluar(&[Uno, Uno]), Uno);
+        assert_eq!(Tristate.evaluar(&[Uno, Cero]), Z);
+        assert_eq!(Tristate.evaluar(&[Cero, X]), X);
+    }
+
+    #[test]
     fn nombres_y_entradas() {
         assert_eq!(Compuerta::desde_nombre("nor"), Some(Nor));
         assert_eq!(Compuerta::desde_nombre("NOR"), None);
         assert!(And.entradas_validas(5) && !And.entradas_validas(1));
         assert!(Not.entradas_validas(1) && !Not.entradas_validas(2));
+        assert!(Tristate.entradas_validas(2) && !Tristate.entradas_validas(3));
     }
 }
