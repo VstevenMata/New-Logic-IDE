@@ -125,9 +125,9 @@ Hay dos formas de escribirlos:
 | Interruptor | `in A;`           | Un click lo enciende y queda encendido            |
 | Pulsador    | `button B;`       | Vale 1 solo mientras se mantiene presionado       |
 | Constante   | `0`, `1`          | Directo donde va una señal                        |
-| Reloj       | `clock CLK(2);`   | Alterna 0/1 a 2 Hz (ajustable desde el panel)     |
+| Reloj       | `clock CLK;`      | Alterna 0/1 con la frecuencia del sistema (todos los `clock` juntos) |
 
-Si un circuito con `in`/`button` se usa dentro de otro, esas entradas se comportan como pines normales.
+Si un circuito con `in`/`button`/`clock` se usa dentro de otro, esas entradas se comportan como pines normales (van en el orden en que se declaran).
 
 ### Salidas y visualización
 
@@ -147,8 +147,8 @@ Si un circuito con `in`/`button` se usa dentro de otro, esas entradas se comport
 | NOT, buffer                    | `not(X)`, `buffer(X)` (siempre 1 entrada)       |
 | Buffer tri-state               | `tristate(dato, habilitar)`                     |
 | Splitter                       | `a = split.derecha(A);` separa (`a[0]`, `a[1]`, ...), `B = split.izquierda(x, y, z);` junta |
-| ROM                            | `R = rom.size(4, 8, "datos.hex");` → `R(dir)` (bits de dirección, bits de dato) |
-| RAM                            | `M = ram.size(4, 8);` → `M(dir, dato, escribir, clk)` |
+| ROM                            | `R = rom.size(4, 8, "00 1F A3");` → `R(dir)` (bits de dirección, bits de dato, datos en hexadecimal desde la dirección 0; lo que falta vale 0) |
+| RAM                            | `M = ram.size(4, 8);` → `M(dir, dato, escribir, clk)` (escribe en el flanco de subida de `clk`) |
 
 **Buses y splitters:** `in A[8];` declara un bus. `A[0]` y `A[0..3]` eligen bits. El **splitter** es un componente, como las compuertas: el lado dice hacia dónde van los pines sueltos. `a = split.derecha(A);` separa un bus (los pines salen por la derecha y se usan con `a[0]`, `a[1]`, ...) y `B = split.izquierda(x, y, z);` junta pines en un bus (entran por la izquierda). El primer pin es el bit 0, como en LogicCircuit. Las compuertas con buses trabajan bit a bit y un bit suelto se repite: `and(D, E)` con `D[8]` da 8 AND. El ancho de una señal interna sale de lo que se le asigna. En el dibujo, `split` es una barra con el bus en un solo pin y los bits numerados del otro lado.
 
@@ -156,7 +156,7 @@ Si un circuito con `in`/`button` se usa dentro de otro, esas entradas se comport
 
 ```cpp
 circuit Demo {
-    clock CLK(1);
+    clock CLK;
     button Reset;
 
     c = Contador(CLK, Reset);    // circuito propio (Contador.SA)
@@ -186,11 +186,13 @@ stmt        = port_decl
             | for_stmt
             | assign ;
 
-port_decl   = ( "in" | "out" ) port { "," port } ";" ;
 port        = IDENT [ "[" INT "]" ] ;         (* A  o  A[8] = bus de 8 bits *)
 
-device_decl = DEVICE IDENT [ "(" [ args ] ")" ] ";" ;   (* button B;  led L(Q); *)
-DEVICE      = "button" | "clock" | "led" | "display7" | "matrix" | "probe" ;
+port_decl   = ( "in" | "out" | "button" | "clock" ) port { "," port } ";" ;
+device_decl = DEVICE IDENT "(" args ")" ";" ;           (* led L(Q); *)
+            | "matrix" IDENT "(" INT "," INT "," args ")" ";" ;
+DEVICE      = "led" | "display7" | "probe" ;
+memory      = ( "rom" | "ram" ) "." "size" "(" INT "," INT [ "," STRING ] ")" ;
 
 inst_decl   = IDENT IDENT [ "[" iexpr "]" ] ";" ;   (* FullAdder fa[8]; *)
 
@@ -207,7 +209,7 @@ postfix     = primary { "." IDENT
                       | "(" [ args ] ")"
                       | index } ;
 
-primary     = IDENT | COMPONENT | "split" "." IDENT | INT | STRING | "(" expr ")" ;
+primary     = IDENT | COMPONENT | "split" "." IDENT | memory | "0" | "1" | "(" expr ")" ;
 COMPONENT   = "and" | "or" | "xor" | "nand" | "nor" | "xnor"
             | "not" | "buffer" | "tristate" | "split" | "rom" | "ram" ;
 index       = "[" iexpr [ ".." iexpr ] "]" ;  (* rango inclusivo *)
@@ -237,11 +239,11 @@ Los componentes son reservados para que no se puedan tapar (`and = ...` es error
 
 1. **El orden no importa** dentro de un circuito: una señal se puede usar antes de definirse (necesario para la realimentación).
 2. **Asignar a un nombre nuevo lo crea:** molde (`M = ram.size(4, 8);`), instancia (`ff = FlipFlop(S, R);`) o señal (`x = nor(A, B);`).
-3. **Un solo conductor por señal:** asignar dos veces la misma señal es error (excepto salidas tri-state en un bus).
+3. **Un solo conductor por señal:** asignar dos veces la misma señal es error, excepto varios `tristate`: se juntan en un bus que vale lo que dé el habilitado (Z si ninguno, X si chocan).
 4. **Cantidades y anchos deben coincidir:** `not(A, B)` es error (espera 1 entrada), igual que `and(A)` (pide 2 o más).
 5. **Resolución de nombres:** circuito actual → moldes y circuitos del proyecto (cualquier archivo del proyecto). Los componentes son reservados, así que nunca chocan.
-6. Todo `out` debe estar asignado. Entradas sin usar generan advertencia.
-7. Una entrada de subcircuito sin conectar vale **X** y genera advertencia.
+6. Todo `out` debe estar asignado. (Pendiente: advertir las entradas sin usar.)
+7. Una entrada de un arreglo de subcircuitos sin conectar es error.
 8. El `for` se desenrolla al compilar; su variable solo existe en índices.
 
 ---

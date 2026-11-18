@@ -367,6 +367,40 @@ pub fn guia(ui: &mut egui::Ui) {
          for (i = 1; i < 4; i++) {\n    b[i].Cin = b[i-1].Cout;\n}",
     );
 
+    seccion(ui, "Pulsador y reloj");
+    ui.label("Son entradas como in. Dentro de otro circuito se comportan como pines normales:");
+    codigo(ui, "button B;    // pulsador\nclock CLK;   // reloj");
+
+    seccion(ui, "Tristate");
+    ui.label(
+        "Deja pasar el dato cuando habilitar vale 1; si no, no maneja el cable (Z). \
+         Varios tristate pueden ir a la misma señal:",
+    );
+    codigo(ui, "Y = tristate(A, EA);\nY = tristate(B, EB);");
+
+    seccion(ui, "Memorias");
+    ui.label(
+        "Primero el molde (bits de dirección, bits de dato); cada uso es una memoria nueva. \
+         Los datos de la ROM van en hexadecimal desde la dirección 0. La RAM escribe en el \
+         flanco de subida del reloj. Un molde fuera de los circuitos se ve en todo el proyecto:",
+    );
+    codigo(
+        ui,
+        "R = rom.size(2, 8, \"00 1F A3 FF\");\n\
+         M = ram.size(4, 8);\n\
+         X = R(A);                // A de 2 bits → X de 8 bits\n\
+         Y = M(A, D, escribir, CLK);",
+    );
+
+    seccion(ui, "Dispositivos de salida");
+    codigo(
+        ui,
+        "led L(Q);\n\
+         display7 D(a, b, c, d, e, f, g, dp);  // o un bus: display7 D(X);\n\
+         matrix M(8, 8, filas, columnas);\n\
+         probe P(CLK, Q);",
+    );
+
     seccion(ui, "Proyecto");
     for paso in [
         "Un proyecto es un solo archivo .SA con varios archivos adentro, como en LogicCircuit.",
@@ -397,7 +431,8 @@ pub fn guia(ui: &mut egui::Ui) {
     seccion(ui, "Usar la app");
     for paso in [
         "Haz click en una entrada (en el dibujo o a la derecha) para cambiarla entre 0 y 1.",
-        "Cables y salidas en verde valen 1; en gris valen 0.",
+        "Cables y salidas en verde valen 1, en gris 0 y en rojo X (desconocido, por ejemplo \
+         un flip-flop que todavía no recibió set ni reset). Reiniciar pone todo en 0.",
         "Arrastra compuertas, entradas y cajas para acomodarlas: se guardan con el proyecto. \
          Ctrl+Z deshace un movimiento y Reordenar las devuelve a su lugar.",
         "Mueve el lienzo arrastrando el fondo o con la rueda; Ctrl + rueda acerca y aleja.",
@@ -413,8 +448,9 @@ pub fn guia(ui: &mut egui::Ui) {
 
     seccion(ui, "Todavía no disponible");
     ui.label(
-        "button, clock, led, display7, matrix, probe, tristate, rom y ram. \
-         Llegan en las próximas versiones.",
+        "El reloj del sistema (Ejecutar, Paso a paso) y el dibujo propio del pulsador, el \
+         display, la matriz y la sonda llegan en las próximas versiones. Por ahora el \
+         pulsador y el reloj se cambian con click y los visores se ven como cajas.",
     );
 }
 
