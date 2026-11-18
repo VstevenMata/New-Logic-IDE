@@ -750,7 +750,9 @@ impl<'a> Elaborador<'a> {
         match a.tipos.get(&clave) {
             Some(&c) => Ok((clave, c)),
             None if a.anchos.contains_key(n) => Err(error(
-                format!("`{n}` es una señal, no un circuito: úsala sin punto, como `{n}` o `{n}[0]`"),
+                format!(
+                    "`{n}` es una señal, no un circuito: úsala sin punto, como `{n}` o `{n}[0]`"
+                ),
                 nombre.rango.clone(),
             )),
             None => Err(error(
