@@ -9,12 +9,13 @@ use eframe::egui::{
     self, Align2, Color32, CornerRadius, FontId, Frame, Margin, Pos2, Rect, RichText, Sense, Shape,
     Stroke, StrokeKind, Theme, Vec2, pos2, vec2,
 };
-use logicsm_core::netlist::{Clase, Netlist, Nodo, Split, Tipo};
+use logicsm_core::netlist::{Clase, Netlist, Nodo, Split, Tipo, Visor};
 use logicsm_core::{Compuerta, Valor};
 use logicsm_sim::Estado;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::mpsc;
+use std::time::Duration;
 
 /// Colores de un tema. Hay dos: CLARO (pastel de index.html) y OSCURO.
 struct Paleta {
@@ -179,8 +180,14 @@ const RECIENTES: usize = 8;
 /// Movimientos del lienzo que se pueden deshacer
 const DESHACER: usize = 100;
 
-/// Aviso para Ejecutar y Paso a paso mientras no exista `clock`
-const SIN_RELOJ: &str = "Llega con clock. Por ahora la simulación corre sola al escribir.";
+/// Aviso para Ejecutar y Paso a paso cuando el circuito no tiene `clock`
+const SIN_RELOJ: &str = "Agrega un clock al circuito para usar el reloj.";
+/// Frecuencias del reloj del sistema que se pueden elegir, en Hz
+const FRECUENCIAS: [f64; 8] = [0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0];
+/// Medios ciclos que se simulan como mucho en un cuadro; si no alcanza, el reloj va más lento
+const MAX_TICS: usize = 1000;
+/// Muestras que guarda y dibuja cada sonda
+const MUESTRAS: usize = 48;
 
 pub struct Interfaz {
     proyecto: Proyecto,
@@ -196,6 +203,18 @@ pub struct Interfaz {
     /// Valor de cada nodo de `red`, memoria de los flip-flops y de las RAM
     estado: Estado,
     estable: bool,
+    /// El reloj del sistema está latiendo (Ejecutar)
+    corriendo: bool,
+    /// Frecuencia del reloj en Hz
+    frecuencia: f64,
+    /// Valor actual de todos los `clock`
+    reloj: bool,
+    /// Momento (de `egui`) del último medio ciclo
+    ultimo_tic: f64,
+    /// Paso a paso movió el reloj: la sonda guarda una muestra aunque nada cambie
+    tic: bool,
+    /// Valores de todos los nodos en las últimas muestras, para dibujar las sondas
+    ondas: VecDeque<Vec<Valor>>,
     /// Mensajes de la pestaña Salida (archivos abiertos, guardados, errores)
     salida: Vec<String>,
     pestana: Pestana,
@@ -330,6 +349,12 @@ impl Interfaz {
             entradas: Vec::new(),
             estado: Estado::default(),
             estable: true,
+            corriendo: false,
+            frecuencia: 1.0,
+            reloj: false,
+            ultimo_tic: 0.0,
+            tic: false,
+            ondas: VecDeque::new(),
             salida: Vec::new(),
             pestana: Pestana::Problemas,
             ver_proyecto: true,
@@ -381,6 +406,7 @@ impl Interfaz {
                     .count();
                 self.entradas.resize(n, false);
                 self.estado = Estado::default();
+                self.ondas.clear();
                 self.red = Some(red);
             }
             Err(problemas) => self.problemas = problemas,
@@ -629,9 +655,60 @@ impl Interfaz {
     /// Entradas en 0 y todo lo demás también, la memoria de los flip-flops incluida
     fn reiniciar(&mut self) {
         self.entradas.fill(false);
+        self.reloj = false;
+        self.ondas.clear();
         if let Some(red) = &self.red {
             self.estado.reiniciar(red);
         }
+    }
+
+    fn hay_reloj(&self) -> bool {
+        self.red.as_ref().is_some_and(|r| {
+            r.nodos
+                .iter()
+                .any(|n| matches!(n.tipo, Tipo::Entrada(_, Clase::Reloj)))
+        })
+    }
+
+    /// Ejecutar / Pausa
+    fn ejecutar(&mut self, ctx: &egui::Context) {
+        self.corriendo = !self.corriendo && self.hay_reloj();
+        self.ultimo_tic = ctx.input(|i| i.time);
+    }
+
+    /// Paso a paso: pausa y avanza medio ciclo del reloj
+    fn paso(&mut self) {
+        self.corriendo = false;
+        if self.hay_reloj() {
+            self.reloj = !self.reloj;
+            self.tic = true;
+        }
+    }
+
+    /// Con Ejecutar, da los medios ciclos que pasaron desde el último cuadro y
+    /// simula después de cada uno
+    fn latir(&mut self, ctx: &egui::Context) {
+        let Some(red) = &self.red else { return };
+        if !self.corriendo {
+            return;
+        }
+        let ahora = ctx.input(|i| i.time);
+        let medio = 0.5 / self.frecuencia;
+        let mut tics = ((ahora - self.ultimo_tic) / medio) as usize;
+        if tics > MAX_TICS {
+            tics = MAX_TICS;
+            self.ultimo_tic = ahora;
+        } else {
+            self.ultimo_tic += tics as f64 * medio;
+        }
+        for _ in 0..tics {
+            self.reloj = !self.reloj;
+            poner(red, &mut self.entradas, Clase::Reloj, self.reloj);
+            self.estable = logicsm_sim::simular(red, &mut self.estado, &self.entradas);
+            muestrear(red, &self.estado.valores, &mut self.ondas, true);
+        }
+        let falta = (self.ultimo_tic + medio - ahora).max(0.0);
+        ctx.request_repaint_after(Duration::from_secs_f64(falta));
     }
 
     fn atajos(&mut self, ctx: &egui::Context) {
@@ -674,6 +751,11 @@ impl Interfaz {
         }
         if tecla(ctrl | Modifiers::SHIFT, Key::F5) {
             self.reiniciar();
+        } else if tecla(Modifiers::NONE, Key::F5) {
+            self.ejecutar(ctx);
+        }
+        if tecla(Modifiers::NONE, Key::F10) {
+            self.paso();
         }
         if tecla(Modifiers::NONE, Key::F1) {
             self.ventana = Some(Ventana::Guia);
@@ -871,8 +953,22 @@ impl eframe::App for Interfaz {
             self.cola_png.pop_front();
             self.preparar_imagen();
         }
+        self.corriendo &= self.hay_reloj();
+        self.latir(&ctx);
         if let Some(red) = &self.red {
+            poner(red, &mut self.entradas, Clase::Reloj, self.reloj);
             self.estable = logicsm_sim::simular(red, &mut self.estado, &self.entradas);
+            muestrear(
+                red,
+                &self.estado.valores,
+                &mut self.ondas,
+                std::mem::take(&mut self.tic),
+            );
+            // Los pulsadores vuelven a 0; el dibujo los pone en 1 si siguen presionados.
+            // Uno que se soltó necesita otro cuadro para simularse en 0.
+            if poner(red, &mut self.entradas, Clase::Pulsador, false) {
+                ctx.request_repaint();
+            }
         }
         let c = paleta(ui);
         egui::Panel::top("barra")
@@ -1226,8 +1322,48 @@ impl Interfaz {
             ui.add_space(6.0);
             ui.separator();
             ui.add_space(6.0);
-            boton(ui, "Ejecutar", Icono::Ejecutar, true).on_hover_text(SIN_RELOJ);
-            boton(ui, "Paso a paso", Icono::Paso, false).on_hover_text(SIN_RELOJ);
+            let hay = self.hay_reloj();
+            let (texto, icono) = if self.corriendo {
+                ("Pausa", Icono::Pausa)
+            } else {
+                ("Ejecutar", Icono::Ejecutar)
+            };
+            let (ejecutar, paso) = if hay {
+                (
+                    "Hace latir el reloj (F5)",
+                    "Avanza medio ciclo del reloj (F10)",
+                )
+            } else {
+                (SIN_RELOJ, SIN_RELOJ)
+            };
+            if ui
+                .add_enabled_ui(hay, |ui| boton(ui, texto, icono, true))
+                .inner
+                .on_hover_text(ejecutar)
+                .on_disabled_hover_text(ejecutar)
+                .clicked()
+            {
+                self.ejecutar(ui.ctx());
+            }
+            if ui
+                .add_enabled_ui(hay, |ui| boton(ui, "Paso a paso", Icono::Paso, false))
+                .inner
+                .on_hover_text(paso)
+                .on_disabled_hover_text(paso)
+                .clicked()
+            {
+                self.paso();
+            }
+            egui::ComboBox::from_id_salt("frecuencia")
+                .width(70.0)
+                .selected_text(hz(self.frecuencia))
+                .show_ui(ui, |ui| {
+                    for f in FRECUENCIAS {
+                        ui.selectable_value(&mut self.frecuencia, f, hz(f));
+                    }
+                })
+                .response
+                .on_hover_text("Frecuencia del reloj");
             if boton(ui, "Reiniciar", Icono::Reiniciar, false)
                 .on_hover_text("Pone las entradas en 0 y borra la memoria")
                 .clicked()
@@ -1369,10 +1505,22 @@ impl Interfaz {
             ui.checkbox(&mut self.ver_inferior, "Panel inferior  (Ctrl+J)");
         });
         ui.menu_button("Simulación", |ui| {
-            ui.add_enabled(false, egui::Button::new("Ejecutar").shortcut_text("F5"))
-                .on_disabled_hover_text(SIN_RELOJ);
-            ui.add_enabled(false, egui::Button::new("Paso a paso").shortcut_text("F10"))
-                .on_disabled_hover_text(SIN_RELOJ);
+            let hay = self.hay_reloj();
+            let texto = if self.corriendo { "Pausa" } else { "Ejecutar" };
+            if ui
+                .add_enabled(hay, egui::Button::new(texto).shortcut_text("F5"))
+                .on_disabled_hover_text(SIN_RELOJ)
+                .clicked()
+            {
+                self.ejecutar(&ctx);
+            }
+            if ui
+                .add_enabled(hay, egui::Button::new("Paso a paso").shortcut_text("F10"))
+                .on_disabled_hover_text(SIN_RELOJ)
+                .clicked()
+            {
+                self.paso();
+            }
             if opcion(ui, "Reiniciar", "Ctrl+Shift+F5") {
                 self.reiniciar();
             }
@@ -1725,10 +1873,25 @@ impl Interfaz {
         titulo(ui, "Entradas");
         let mut k = 0;
         for n in &red.nodos {
-            if let Tipo::Entrada(nombre, _) = &n.tipo {
+            if let Tipo::Entrada(nombre, clase) = &n.tipo {
                 let v = &mut self.entradas[k];
                 let texto = format!("{nombre} = {}", *v as u8);
-                ui.toggle_value(v, texto);
+                match clase {
+                    Clase::Interruptor => {
+                        ui.toggle_value(v, texto);
+                    }
+                    Clase::Pulsador => {
+                        let b = ui.add(egui::Button::new(texto).selected(*v));
+                        if b.is_pointer_button_down_on() {
+                            *v = true;
+                            ui.ctx().request_repaint();
+                        }
+                    }
+                    Clase::Reloj => {
+                        ui.add_enabled(false, egui::Button::new(texto).selected(*v))
+                            .on_disabled_hover_text("Lo mueven Ejecutar y Paso a paso");
+                    }
+                }
                 k += 1;
             }
         }
@@ -1900,14 +2063,16 @@ impl Interfaz {
             return;
         };
 
-        // Arrastrar el fondo o la rueda mueven la vista; Ctrl + rueda acerca y aleja
         let archivo = self.proyecto.actual().nombre.clone();
         let posiciones = self.proyecto.posiciones.entry(archivo).or_default();
         // También la capa del dibujo y cuántas figuras son la cuadrícula (para el SVG)
         let (capa, cuadricula, dibujo) = ui
             .scope_builder(egui::UiBuilder::new().max_rect(afuera), |ui| {
+                // Dos dedos (o la rueda) acercan y alejan: winit 0.30 no manda el pellizco en
+                // Linux. Arrastrar mueve la vista.
                 egui::Scene::new()
                     .zoom_range(0.2..=3.0)
+                    .scroll_zooms(true)
                     .show(ui, &mut self.vista, |ui| {
                         puntos(ui);
                         let capa = ui.layer_id();
@@ -1920,6 +2085,7 @@ impl Interfaz {
                             &self.estado.valores,
                             &mut self.entradas,
                             posiciones,
+                            &self.ondas,
                         );
                         (capa, cuadricula, dibujo)
                     })
@@ -1982,10 +2148,10 @@ impl Interfaz {
                         .on_hover_text(ayuda)
                         .clicked()
                     };
-                    if control(ui, "-", "Alejar (Ctrl + rueda)") {
+                    if control(ui, "-", "Alejar (rueda o dos dedos)") {
                         zoom = Some(1.25);
                     }
-                    if control(ui, "+", "Acercar (Ctrl + rueda)") {
+                    if control(ui, "+", "Acercar (rueda o dos dedos)") {
                         zoom = Some(0.8);
                     }
                     if control(ui, "Ajustar", "Muestra todo el circuito") {
@@ -2077,7 +2243,7 @@ impl Interfaz {
                         }
                     }
                     Pestana::Tabla => self.tabla_de_verdad(ui),
-                    Pestana::Ondas => vacio(ui, "Las ondas llegan con clock y probe."),
+                    Pestana::Ondas => vacio(ui, "Las ondas de cada probe se dibujan en el lienzo."),
                     Pestana::Salida => {
                         if self.salida.is_empty() {
                             vacio(ui, "Sin mensajes.");
@@ -2560,9 +2726,12 @@ fn descripcion(red: &Netlist, pieza: Pieza) -> String {
                 Tipo::Entrada(x, Clase::Interruptor) => {
                     format!("Entrada {x} (click para cambiarla)")
                 }
-                // ponytail: pulsador y reloj se cambian con click hasta que llegue el reloj del sistema
-                Tipo::Entrada(x, Clase::Pulsador) => format!("Pulsador {x} (click para cambiarlo)"),
-                Tipo::Entrada(x, Clase::Reloj) => format!("Reloj {x} (click para cambiarlo)"),
+                Tipo::Entrada(x, Clase::Pulsador) => {
+                    format!("Pulsador {x} (vale 1 mientras lo mantienes presionado)")
+                }
+                Tipo::Entrada(x, Clase::Reloj) => {
+                    format!("Reloj {x} (lo mueven Ejecutar y Paso a paso)")
+                }
                 Tipo::Salida(x) => format!("Salida {x}"),
                 Tipo::Constante(v) => format!("Constante {}", *v as u8),
                 Tipo::Compuerta(g) if n.nombre.is_empty() => g.nombre().to_uppercase(),
@@ -2616,6 +2785,7 @@ fn dibujar(
     valores: &[Valor],
     entradas: &mut [bool],
     posiciones: &mut Posiciones,
+    ondas: &VecDeque<Vec<Valor>>,
 ) -> Dibujo {
     let c = paleta(ui);
     let p = ui.painter().clone();
@@ -2659,10 +2829,16 @@ fn dibujar(
             if inst.split.is_some() {
                 return vec2(8.0, (pines as f32 * 16.0 + 8.0).max(30.0));
             }
-            vec2(
-                (inst.circuito.len() as f32 * 7.0 + 20.0).max(96.0),
-                (pines as f32 * 18.0 + 30.0).max(48.0),
-            )
+            let ancho = (inst.circuito.len() as f32 * 7.0 + 20.0).max(96.0);
+            let alto = (pines as f32 * 18.0 + 30.0).max(48.0);
+            match visor_de(red, g) {
+                Some(Visor::Probe) => vec2(200.0, alto),
+                Some(Visor::Matrix(f, c)) => vec2(
+                    ancho.max(34.0 + CELDA * c as f32),
+                    alto.max(34.0 + CELDA * f as f32),
+                ),
+                _ => vec2(ancho, alto),
+            }
         }
     };
 
@@ -2720,9 +2896,16 @@ fn dibujar(
             centros[j] += r.drag_delta();
             posiciones.insert(clave, [centros[j].x, centros[j].y]);
         }
-        if matches!(pieza, Pieza::Nodo(i) if matches!(red.nodos[i].tipo, Tipo::Entrada(..))) {
-            if r.clicked() {
-                entradas[k] = !entradas[k];
+        if let Pieza::Nodo(i) = pieza
+            && let Tipo::Entrada(_, clase) = red.nodos[i].tipo
+        {
+            match clase {
+                Clase::Interruptor if r.clicked() => entradas[k] = !entradas[k],
+                Clase::Pulsador if r.is_pointer_button_down_on() => {
+                    entradas[k] = true;
+                    ui.ctx().request_repaint();
+                }
+                _ => {}
             }
             k += 1;
         }
@@ -2879,6 +3062,10 @@ fn dibujar(
                         c.tenue,
                     );
                 }
+                if let Some(visor) = visor_de(red, g) {
+                    let bits: Vec<usize> = inst.entradas.iter().map(|e| e.1).collect();
+                    dibujar_visor(&p, c, r, visor, &bits, &valor, ondas);
+                }
                 continue;
             }
         };
@@ -2950,6 +3137,164 @@ fn dibujar(
     dibujo
 }
 
+/// Lado de cada LED de una `matrix`
+const CELDA: f32 = 14.0;
+
+/// El visor (display, matriz o sonda) que se dibuja en la caja `g`
+fn visor_de(red: &Netlist, g: usize) -> Option<Visor> {
+    red.nodos.iter().find_map(|n| match n.tipo {
+        Tipo::Visor(v, _) if n.instancia == Some(g) => Some(v),
+        _ => None,
+    })
+}
+
+/// El contenido de la caja de un visor: los segmentos, los LEDs o las ondas.
+/// `bits` son los nodos de sus pines, en orden.
+fn dibujar_visor(
+    p: &egui::Painter,
+    c: &Paleta,
+    r: Rect,
+    visor: Visor,
+    bits: &[usize],
+    valor: &dyn Fn(usize) -> Valor,
+    ondas: &VecDeque<Vec<Valor>>,
+) {
+    // A la izquierda quedan los nombres de los pines y arriba el del visor
+    let area = Rect::from_min_max(
+        pos2(r.left() + 24.0, r.top() + 22.0),
+        r.right_bottom() - vec2(8.0, 8.0),
+    );
+    // Encendido verde, apagado gris claro, X y Z con su color
+    let luz = |v: Valor| match v {
+        Valor::Uno => c.uno,
+        Valor::Cero => c.suave,
+        _ => c.de(v),
+    };
+    match visor {
+        Visor::Display7 => {
+            let alto = area.height().min(area.width() * 1.6);
+            let d = Rect::from_center_size(area.center(), vec2(alto * 0.5, alto));
+            let (tl, tr, ml, mr, bl, br) = (
+                d.left_top(),
+                d.right_top(),
+                d.left_center(),
+                d.right_center(),
+                d.left_bottom(),
+                d.right_bottom(),
+            );
+            // a, b, c, d, e, f, g
+            let segmentos = [
+                (tl, tr),
+                (tr, mr),
+                (mr, br),
+                (bl, br),
+                (ml, bl),
+                (tl, ml),
+                (ml, mr),
+            ];
+            for (k, (a, b)) in segmentos.into_iter().enumerate() {
+                let corte = (b - a).normalized() * 3.5;
+                let v = valor(bits[k]);
+                p.line_segment([a + corte, b - corte], Stroke::new(5.0, luz(v)));
+            }
+            p.circle_filled(br + vec2(7.0, -2.0), 3.0, luz(valor(bits[7])));
+        }
+        Visor::Matrix(filas, columnas) => {
+            let lado = (area.width() / columnas as f32)
+                .min(area.height() / filas as f32)
+                .min(CELDA);
+            let rejilla = Rect::from_center_size(
+                area.center(),
+                vec2(lado * columnas as f32, lado * filas as f32),
+            );
+            // ponytail: un LED se enciende con su fila y su columna en 1 (sin multiplexado)
+            for f in 0..filas {
+                for k in 0..columnas {
+                    let v = match (valor(bits[f]), valor(bits[filas + k])) {
+                        (Valor::Uno, Valor::Uno) => Valor::Uno,
+                        (Valor::Cero, _) | (_, Valor::Cero) => Valor::Cero,
+                        _ => Valor::X,
+                    };
+                    let centro = rejilla.min + vec2(k as f32 + 0.5, f as f32 + 0.5) * lado;
+                    p.circle(centro, lado * 0.38, luz(v), Stroke::new(0.8, c.tenue));
+                }
+            }
+        }
+        // Una línea por señal, la muestra más nueva a la derecha
+        Visor::Probe => {
+            let ancho = area.width() / MUESTRAS as f32;
+            let inicio = MUESTRAS - ondas.len();
+            let alto = (r.height() / (bits.len() + 1) as f32 * 0.3).min(6.0);
+            for (k, &e) in bits.iter().enumerate() {
+                let y = altura_pin(r, k, bits.len());
+                let mut antes: Option<f32> = None;
+                for (s, muestra) in ondas.iter().enumerate() {
+                    let v = muestra.get(e).copied().unwrap_or_default();
+                    let x = area.left() + (inicio + s) as f32 * ancho;
+                    let altura = match v {
+                        Valor::Uno => y - alto,
+                        Valor::Cero => y + alto,
+                        _ => y,
+                    };
+                    if let Some(a) = antes.filter(|&a| a != altura) {
+                        p.line_segment([pos2(x, a), pos2(x, altura)], Stroke::new(1.0, c.tenue));
+                    }
+                    p.line_segment(
+                        [pos2(x, altura), pos2(x + ancho, altura)],
+                        Stroke::new(1.5, c.de(v)),
+                    );
+                    antes = Some(altura);
+                }
+            }
+        }
+        Visor::Led => {}
+    }
+}
+
+/// Pone en `v` todas las entradas de la clase `clase`. Devuelve si alguna estaba en 1.
+fn poner(red: &Netlist, entradas: &mut [bool], clase: Clase, v: bool) -> bool {
+    let mut habia = false;
+    let de_entrada = red.nodos.iter().filter_map(|n| match n.tipo {
+        Tipo::Entrada(_, k) => Some(k),
+        _ => None,
+    });
+    for (e, k) in entradas.iter_mut().zip(de_entrada) {
+        if k == clase {
+            habia |= *e;
+            *e = v;
+        }
+    }
+    habia
+}
+
+/// Guarda los valores de la red para las sondas: en cada medio ciclo del reloj
+/// (`tic`) o cuando cambia una señal que miran
+fn muestrear(red: &Netlist, valores: &[Valor], ondas: &mut VecDeque<Vec<Valor>>, tic: bool) {
+    let mut sondas = red
+        .nodos
+        .iter()
+        .filter(|n| matches!(n.tipo, Tipo::Visor(Visor::Probe, _)))
+        .flat_map(|n| n.entradas.iter())
+        .peekable();
+    if sondas.peek().is_none() {
+        return;
+    }
+    let cambio = ondas
+        .back()
+        .is_none_or(|u| sondas.any(|&e| u.get(e) != valores.get(e)));
+    if tic || cambio {
+        if ondas.len() == MUESTRAS {
+            ondas.pop_front();
+        }
+        ondas.push_back(valores.to_vec());
+    }
+}
+
+/// "0,5 Hz", "10 Hz"
+fn hz(f: f64) -> String {
+    format!("{f} Hz").replace('.', ",")
+}
+
 /// Encabezado de 38 px con línea inferior, para el editor y el lienzo
 fn cabecera(ui: &mut egui::Ui, texto: &str) {
     let c = paleta(ui);
@@ -3006,6 +3351,7 @@ fn boton_panel(ui: &mut egui::Ui, visible: bool, lado: Lado, ayuda: &str) -> boo
 #[derive(Clone, Copy)]
 enum Icono {
     Ejecutar,
+    Pausa,
     Paso,
     Reiniciar,
     Luna,
@@ -3042,6 +3388,12 @@ fn boton(ui: &mut egui::Ui, texto: &str, icono: Icono, principal: bool) -> egui:
                 centro + vec2(-4.0, 5.0),
             ];
             p.add(Shape::convex_polygon(triangulo, color, Stroke::NONE));
+        }
+        Icono::Pausa => {
+            for x in [-3.0, 3.0] {
+                let barra = Rect::from_center_size(centro + vec2(x, 0.0), vec2(3.0, 10.0));
+                p.rect_filled(barra, 1.0, color);
+            }
         }
         Icono::Paso => {
             let triangulo = vec![
