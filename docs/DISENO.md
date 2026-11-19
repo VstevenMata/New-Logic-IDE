@@ -252,7 +252,7 @@ Los componentes son reservados para que no se puedan tapar (`and = ...` es error
 
 - **Retardo:** cada compuerta tarda 1 unidad de tiempo. Así se ven las carreras y los *glitches*, y los flip-flops funcionan.
 - **Estado inicial:** todo arranca en **X** (rojo), como en la realidad. El botón **Reset** pone todo en 0.
-- **Paso a paso:** cada click avanza una unidad de tiempo y resalta las compuertas que cambiaron.
+- **Reloj del sistema:** la frecuencia se elige en la barra de simulación y todos los `clock` laten juntos. **Ejecutar/Pausa** lo arranca y lo detiene; **Paso a paso** avanza medio ciclo (un flanco) y deja que el circuito se asiente.
 - **Dibujo:** se genera automáticamente; las compuertas se pueden arrastrar para acomodarlas y las posiciones se guardan dentro del mismo `.SA` del proyecto. Los circuitos se crean en código, no dibujando.
 - **Idioma:** interfaz y mensajes de error en español; palabras clave en inglés.
 - **Ejemplos incluidos:** compuertas básicas, half adder, full adder, flip-flop SR, contador y display 7 segmentos.

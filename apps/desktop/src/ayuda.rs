@@ -435,23 +435,20 @@ pub fn guia(ui: &mut egui::Ui) {
          un flip-flop que todavía no recibió set ni reset). Reiniciar pone todo en 0.",
         "Arrastra compuertas, entradas y cajas para acomodarlas: se guardan con el proyecto. \
          Ctrl+Z deshace un movimiento y Reordenar las devuelve a su lugar.",
-        "Mueve el lienzo arrastrando el fondo o con la rueda; Ctrl + rueda acerca y aleja.",
+        "Mueve el lienzo arrastrando el fondo; la rueda o dos dedos en el touchpad acercan y alejan.",
         "Pasa el mouse sobre una pieza para ver su nombre. Cada circuito propio se ve como una caja.",
         "Los errores aparecen en la pestaña Problemas; con un click vas a su línea.",
         "Arrastra un archivo .SA a la ventana para abrirlo; con un proyecto abierto, se agrega \
          y su circuito se declara en el archivo abierto.",
         "Arrastra un archivo de la lista Proyecto al código o al circuito para declararlo ahí.",
         "La pestaña Tabla de verdad muestra todas las combinaciones de entradas.",
+        "Con un clock en el circuito, Ejecutar (F5) lo hace latir con la frecuencia elegida \
+         en la barra y Paso a paso (F10) avanza medio ciclo. Todos los clock laten juntos.",
+        "Un pulsador vale 1 solo mientras lo mantienes presionado.",
+        "Una sonda (probe) dibuja las ondas de sus señales en el lienzo.",
     ] {
         ui.label(format!("•  {paso}"));
     }
-
-    seccion(ui, "Todavía no disponible");
-    ui.label(
-        "El reloj del sistema (Ejecutar, Paso a paso) y el dibujo propio del pulsador, el \
-         display, la matriz y la sonda llegan en las próximas versiones. Por ahora el \
-         pulsador y el reloj se cambian con click y los visores se ven como cajas.",
-    );
 }
 
 pub fn atajos(ui: &mut egui::Ui) {
@@ -474,6 +471,8 @@ pub fn atajos(ui: &mut egui::Ui) {
                 ("Panel de proyecto", "Ctrl+B"),
                 ("Panel inferior", "Ctrl+J"),
                 ("Entradas y salidas", "Ctrl+Alt+B"),
+                ("Ejecutar / Pausa", "F5"),
+                ("Paso a paso (medio ciclo del reloj)", "F10"),
                 ("Reiniciar simulación", "Ctrl+Shift+F5"),
                 ("Guía del lenguaje", "F1"),
             ] {
