@@ -4,9 +4,15 @@
   # nix run .                 abre LogicSM
   # nix run .#cli -- and 3    tabla de verdad de una compuerta predefinida
   # nix develop               entorno con cargo, clippy, rustfmt y rust-analyzer
+  # nix develop .#web         entorno para la versión web: trunk serve
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  # Rust con el target wasm32 (el de nixpkgs solo compila para el sistema)
+  inputs.rust-overlay = {
+    url = "github:oxalica/rust-overlay";
+    inputs.nixpkgs.follows = "nixpkgs";
+  };
 
-  outputs = { self, nixpkgs }:
+  outputs = { self, nixpkgs, rust-overlay }:
     let
       sistemas = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
       porSistema = f: nixpkgs.lib.genAttrs sistemas (s: f nixpkgs.legacyPackages.${s});
@@ -57,6 +63,14 @@
           packages = with pkgs; [ cargo rustc clippy rustfmt rust-analyzer ];
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath (librerias pkgs);
         };
+        web =
+          let p = pkgs.extend rust-overlay.overlays.default;
+          in p.mkShell {
+            packages = [
+              (p.rust-bin.stable.latest.default.override { targets = [ "wasm32-unknown-unknown" ]; })
+              p.trunk
+            ];
+          };
       });
     };
 }

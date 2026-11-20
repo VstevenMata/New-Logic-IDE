@@ -37,6 +37,8 @@ circuit HalfAdder {
 
 ## Instalación
 
+**En el navegador**, sin instalar nada: <https://vstevenmata.github.io/New-Logic-IDE/>. El proyecto se guarda en el navegador; Guardar lo descarga como `.SA`.
+
 **Linux y macOS**
 
 ```bash
@@ -59,18 +61,18 @@ Después se abre con `logicsm` y se actualiza con `logicsm update`.
 
 ## Estado
 
-En desarrollo. La interfaz ya está lista; el lenguaje y el simulador se están construyendo.
+En desarrollo. El lenguaje, el simulador y las herramientas educativas ya funcionan.
 
 | | Etapa |
 |---|---|
-| ✅ | Interfaz de escritorio con tema claro y oscuro |
-| ✅ | Instaladores y actualización automática |
-| ✅ | Publicación automática de versiones para Linux, macOS y Windows |
+| ✅ | Interfaz con tema claro y oscuro, de escritorio y en el navegador |
+| ✅ | Instaladores, actualización automática y publicación de versiones para Linux, macOS y Windows |
 | ✅ | Revisión automática de cada cambio (CI) |
-| 🔨 | Lenguaje: lexer, parser y análisis semántico |
-| ⏳ | Simulador por eventos y dibujo automático del circuito |
-| ⏳ | Circuitos secuenciales, buses, display de 7 segmentos y ondas |
-| ⏳ | Herramientas educativas y exportación a Verilog y LogicCircuit |
+| ✅ | Lenguaje: circuitos propios, buses, `for`, dispositivos y memorias |
+| ✅ | Simulador por eventos (0, 1, X, Z) y dibujo automático del circuito |
+| ✅ | Reloj, pulsador, display de 7 segmentos, matriz de LEDs y sonda |
+| ✅ | Tabla de verdad, verificación, circuito desde la tabla y equivalencia |
+| ⏳ | Exportación a Verilog y LogicCircuit |
 
 ## Documentación
 

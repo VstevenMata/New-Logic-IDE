@@ -1,11 +1,13 @@
 # Al fusionar a main: si la versión de Cargo.toml no tiene tag todavía, compila LogicSM para
 # cada sistema, crea el tag vX.Y.Z y publica el release con los nombres que descargan
-# instalar.sh e instalar.ps1. Si la versión no cambió, no hace nada.
+# instalar.sh e instalar.ps1, y publica la versión web en GitHub Pages. Si la versión no
+# cambió, no hace nada. "Run workflow" (a mano) solo vuelve a publicar la web.
 name: Release
 
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -35,7 +37,7 @@ jobs:
 
   compilar:
     needs: version
-    if: needs.version.outputs.nuevo == 'true'
+    if: needs.version.outputs.nuevo == 'true' && github.event_name == 'push'
     strategy:
       matrix:
         include:
@@ -76,3 +78,30 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.version.outputs.tag }}
+
+  # La app en el navegador: https://<usuario>.github.io/<repositorio>/
+  # Requiere Settings → Pages → Source: GitHub Actions
+  web:
+    needs: version
+    if: needs.version.outputs.nuevo == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.desplegar.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Instalar trunk
+        run: curl -sSL https://github.com/trunk-rs/trunk/releases/latest/download/trunk-x86_64-unknown-linux-gnu.tar.gz | tar xz
+      # Trunk.toml dice qué página compilar y que quede en dist/
+      - run: ./trunk build --release --locked --public-url "/${{ github.event.repository.name }}/"
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+      - id: desplegar
+        uses: actions/deploy-pages@v4

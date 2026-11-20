@@ -4,6 +4,7 @@
 //! El código se compila en cada cambio y el lienzo dibuja el circuito al instante.
 
 use crate::ayuda;
+use crate::plataforma::{self, Leido, Llegada, Subido, WEB};
 use crate::proyecto::{Posiciones, Problema, Proyecto, es_sa};
 use eframe::egui::{
     self, Align2, Color32, CornerRadius, FontId, Frame, Margin, Pos2, Rect, RichText, Sense, Shape,
@@ -13,7 +14,7 @@ use logicsm_core::netlist::{Clase, Netlist, Nodo, Split, Tipo, Visor};
 use logicsm_core::solucion::{Producto, escribir, minimizar};
 use logicsm_core::{Compuerta, Valor};
 use logicsm_sim::{Estado, Tabla};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Duration;
@@ -205,6 +206,9 @@ pub struct Interfaz {
     esperado: HashMap<String, Vec<Vec<Option<bool>>>>,
     /// Archivo con el que se compara el abierto en la tabla de verdad
     comparar: Option<String>,
+    /// Matrices de LEDs con cuadrados en vez de círculos (clave de la pieza), por archivo
+    // ponytail: solo mientras la app está abierta; guardarlo en el .SA si se pide
+    cuadradas: HashMap<String, HashSet<String>>,
     /// Valor de cada `in`, en orden
     entradas: Vec<bool>,
     /// Valor de cada nodo de `red`, memoria de los flip-flops y de las RAM
@@ -270,6 +274,8 @@ pub struct Interfaz {
     volver_a: usize,
     /// Resultado de guardar la captura, que llega desde otro hilo
     captura: (mpsc::Sender<Exportado>, mpsc::Receiver<Exportado>),
+    /// Proyectos leídos (soltados sobre la ventana, o subidos en el navegador)
+    subidas: (Llegada, mpsc::Receiver<Leido>),
 }
 
 /// Un archivo de la lista que se está arrastrando (su índice)
@@ -339,11 +345,13 @@ impl Interfaz {
             ctx.set_theme(Theme::Light);
         }
         let textura = |nombre: &str, png: &[u8]| {
-            let icono =
-                eframe::icon_data::from_png_bytes(png).expect("los PNG de assets son válidos");
+            // Con `image` y no con eframe::icon_data, que no existe en el navegador
+            let icono = image::load_from_memory(png)
+                .expect("los PNG de assets son válidos")
+                .to_rgba8();
             let imagen = egui::ColorImage::from_rgba_unmultiplied(
-                [icono.width as usize, icono.height as usize],
-                &icono.rgba,
+                [icono.width() as usize, icono.height() as usize],
+                icono.as_raw(),
             );
             ctx.load_texture(nombre, imagen, egui::TextureOptions::LINEAR)
         };
@@ -356,6 +364,7 @@ impl Interfaz {
             avisos: Vec::new(),
             esperado: HashMap::new(),
             comparar: None,
+            cuadradas: HashMap::new(),
             entradas: Vec::new(),
             estado: Estado::default(),
             estable: true,
@@ -392,10 +401,19 @@ impl Interfaz {
             pedida: false,
             volver_a: 0,
             captura: mpsc::channel(),
+            subidas: mpsc::channel(),
         };
         // El que se pidió (si no existe, cargar avisa) o el último, si todavía existe
         if let Some(ruta) = proyecto.or(ultimo.filter(|r| r.is_file())) {
             s.cargar(ruta);
+        }
+        // En el navegador, el que quedó guardado en el navegador
+        let guardado = cc
+            .storage
+            .and_then(|s| eframe::get_value::<Option<Subido>>(s, "proyecto_web"))
+            .flatten();
+        if let Some((nombre, texto)) = guardado.filter(|_| WEB) {
+            s.usar(Proyecto::leido(PathBuf::from(nombre), &texto));
         }
         s
     }
@@ -488,13 +506,17 @@ impl Interfaz {
     fn hacer(&mut self, ctx: &egui::Context, accion: Accion) {
         match accion {
             Accion::Nuevo => {
-                let Some(ruta) = dialogo("Nuevo proyecto")
-                    .set_file_name("Proyecto.SA")
-                    .save_file()
+                let Some(ruta) =
+                    plataforma::guardar_como("Nuevo proyecto", plataforma::SA, "Proyecto.SA", None)
                 else {
                     return;
                 };
                 let mut proyecto = Proyecto::nuevo();
+                // En el navegador no se descarga hasta que se guarde
+                if WEB {
+                    proyecto.ruta = Some(ruta);
+                    return self.usar(proyecto);
+                }
                 match proyecto.guardar(Some(ruta)) {
                     Ok(()) => self.usar(proyecto),
                     Err(e) => self.aviso(e),
@@ -506,7 +528,8 @@ impl Interfaz {
                 self.recompilar_desde_cero();
             }
             Accion::Abrir => {
-                if let Some(ruta) = dialogo("Abrir un proyecto").pick_file() {
+                if let Some(ruta) = plataforma::abrir_sa(ctx, "Abrir un proyecto", &self.subidas.0)
+                {
                     self.cargar(ruta);
                 }
             }
@@ -529,11 +552,10 @@ impl Interfaz {
             let nombre = ruta
                 .and_then(|r| r.file_name())
                 .map_or("Proyecto.SA".into(), |n| n.to_string_lossy());
-            let mut d = dialogo("Guardar el proyecto").set_file_name(nombre);
-            if let Some(carpeta) = ruta.and_then(|r| r.parent()) {
-                d = d.set_directory(carpeta);
-            }
-            let Some(ruta) = d.save_file() else {
+            let carpeta = ruta.and_then(|r| r.parent());
+            let Some(ruta) =
+                plataforma::guardar_como("Guardar el proyecto", plataforma::SA, &nombre, carpeta)
+            else {
                 return false;
             };
             Some(ruta)
@@ -543,7 +565,8 @@ impl Interfaz {
         match self.proyecto.guardar(nueva) {
             Ok(()) => {
                 if let Some(ruta) = self.proyecto.ruta.clone() {
-                    self.salida.push(format!("Guardado en {}", ruta.display()));
+                    let hecho = if WEB { "Descargado" } else { "Guardado en" };
+                    self.salida.push(format!("{hecho} {}", ruta.display()));
                     self.recordar(ruta);
                 }
                 true
@@ -572,15 +595,11 @@ impl Interfaz {
 
     /// Un `.SA` soltado sobre la ventana con un proyecto abierto: sus archivos se agregan
     /// y su circuito (el del último archivo) se declara en el archivo abierto
-    fn importar(&mut self, ruta: PathBuf) {
-        if self.proyecto.ruta.as_ref() == Some(&ruta) {
+    fn importar(&mut self, otro: Proyecto) {
+        if otro.ruta.is_some() && otro.ruta == self.proyecto.ruta && !WEB {
             self.aviso("Ese es el proyecto abierto.".into());
             return;
         }
-        let otro = match Proyecto::abrir(ruta.clone()) {
-            Ok(p) => p,
-            Err(e) => return self.aviso(format!("No se pudo abrir {}: {e}", ruta.display())),
-        };
         let archivos: Vec<(&str, &str)> = otro
             .archivos
             .iter()
@@ -744,7 +763,7 @@ impl Interfaz {
         if tecla(ctrl, Key::O) {
             self.pedir(ctx, Accion::Abrir);
         }
-        if tecla(ctrl, Key::Q) {
+        if tecla(ctrl, Key::Q) && !WEB {
             self.pedir(ctx, Accion::Salir);
         }
         // Sin nada enfocado (el editor no tiene el cursor), Ctrl+Z deshace movimientos del lienzo
@@ -781,18 +800,25 @@ impl Interfaz {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.confirmar = Some(Accion::Salir);
         }
-        // Un archivo .SA soltado sobre la ventana
-        let soltado = ctx.input(|i| i.raw.dropped_files.first().map(|f| f.path().to_path_buf()));
-        if let Some(ruta) = soltado {
-            if ruta.is_file() && es_sa(&ruta) {
-                // Con un proyecto abierto se agrega como componente; si no, se abre
-                if self.sin_proyecto {
-                    self.pedir(ctx, Accion::AbrirRuta(ruta));
-                } else {
-                    self.importar(ruta);
-                }
+        // Un archivo .SA soltado sobre la ventana: con un proyecto abierto se agrega como
+        // componente; si no, se abre
+        let soltado = ctx.input(|i| i.raw.dropped_files.first().cloned());
+        if let Some(f) = soltado {
+            if !es_sa(f.path()) {
+                self.aviso(format!("{} no es un archivo .SA.", f.path().display()));
+            } else if let Err(e) =
+                plataforma::leer_soltado(ctx, f, self.sin_proyecto, &self.subidas.0)
+            {
+                self.aviso(format!("No se pudo abrir el archivo: {e}"));
+            }
+        }
+        // Lo leído (soltado, o subido con Abrir en el navegador)
+        while let Ok(((ruta, texto), abrir)) = self.subidas.1.try_recv() {
+            let p = Proyecto::leido(PathBuf::from(ruta), &texto);
+            if abrir {
+                self.usar(p);
             } else {
-                self.aviso(format!("{} no es un archivo .SA.", ruta.display()));
+                self.importar(p);
             }
         }
     }
@@ -958,6 +984,21 @@ impl eframe::App for Interfaz {
             .flatten();
         eframe::set_value(storage, "recientes", &self.recientes);
         eframe::set_value(storage, "ultimo", &ultimo);
+        // En el navegador no hay archivos: el proyecto abierto se guarda en el navegador
+        if WEB {
+            let abierto = (!self.sin_proyecto).then(|| {
+                let nombre = self.proyecto.ruta.as_deref().and_then(|r| r.file_name());
+                let nombre: String =
+                    nombre.map_or("Proyecto.SA".into(), |n| n.to_string_lossy().into());
+                (nombre, self.proyecto.texto())
+            });
+            eframe::set_value::<Option<Subido>>(storage, "proyecto_web", &abierto);
+        }
+    }
+
+    /// En el navegador se guarda seguido: es lo único que conserva el proyecto
+    fn auto_save_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(if WEB { 5 } else { 30 })
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -1215,14 +1256,12 @@ impl Interfaz {
             .and_then(|r| r.parent())
             .map(PathBuf::from);
         let destinos: Vec<(usize, PathBuf)> = if let [i] = indices[..] {
-            let mut d = rfd::FileDialog::new()
-                .set_title(formato.titulo())
-                .add_filter(formato.tipo(), &[ext])
-                .set_file_name(format!("{}.{ext}", self.proyecto.archivos[i].nombre));
-            if let Some(c) = &carpeta_proyecto {
-                d = d.set_directory(c);
-            }
-            let Some(ruta) = d.save_file() else {
+            let nombre = format!("{}.{ext}", self.proyecto.archivos[i].nombre);
+            let extensiones = [ext];
+            let filtro = (formato.tipo(), &extensiones[..]);
+            let carpeta = carpeta_proyecto.as_deref();
+            let Some(ruta) = plataforma::guardar_como(formato.titulo(), filtro, &nombre, carpeta)
+            else {
                 return;
             };
             let tiene = ruta
@@ -1237,12 +1276,9 @@ impl Interfaz {
                 },
             )]
         } else {
-            let mut d =
-                rfd::FileDialog::new().set_title(format!("{}: elige la carpeta", formato.titulo()));
-            if let Some(c) = &carpeta_proyecto {
-                d = d.set_directory(c);
-            }
-            let Some(carpeta) = d.pick_folder() else {
+            let titulo = format!("{}: elige la carpeta", formato.titulo());
+            let Some(carpeta) = plataforma::elegir_carpeta(&titulo, carpeta_proyecto.as_deref())
+            else {
                 return;
             };
             indices
@@ -1253,8 +1289,10 @@ impl Interfaz {
                 })
                 .collect()
         };
-        // Nunca se escribe encima del proyecto (un archivo con su mismo nombre, en .SA)
-        if let Some(propio) = &self.proyecto.ruta
+        // Nunca se escribe encima del proyecto (un archivo con su mismo nombre, en .SA);
+        // en el navegador todo se descarga
+        if !WEB
+            && let Some(propio) = &self.proyecto.ruta
             && destinos.iter().any(|(_, r)| r == propio)
         {
             self.aviso(format!(
@@ -1291,7 +1329,7 @@ impl Interfaz {
             let resultado = contenido
                 .map_err(|e| format!("{}: {e}, no se exportó.", self.proyecto.archivos[i].nombre))
                 .and_then(|texto| {
-                    std::fs::write(&ruta, texto)
+                    plataforma::escribir(&ruta, texto.as_bytes())
                         .map(|()| format!("Exportado: {}", ruta.display()))
                         .map_err(|e| format!("No se pudo exportar {}: {e}", ruta.display()))
                 });
@@ -1465,7 +1503,7 @@ impl Interfaz {
             if !self.sin_proyecto && opcion(ui, "Cerrar proyecto", "") {
                 self.pedir(&ctx, Accion::Cerrar);
             }
-            if opcion(ui, "Salir", "Ctrl+Q") {
+            if !WEB && opcion(ui, "Salir", "Ctrl+Q") {
                 self.pedir(&ctx, Accion::Salir);
             }
         });
@@ -1493,9 +1531,9 @@ impl Interfaz {
                 self.para_editor = Some(egui::Event::Copy);
             }
             if opcion(ui, "Pegar", "Ctrl+V") {
-                match arboard::Clipboard::new().and_then(|mut p| p.get_text()) {
+                match plataforma::pegar() {
                     Ok(texto) => self.para_editor = Some(egui::Event::Paste(texto)),
-                    Err(e) => self.aviso(format!("No se pudo leer el portapapeles: {e}")),
+                    Err(e) => self.aviso(e),
                 }
             }
             ui.separator();
@@ -1558,7 +1596,8 @@ impl Interfaz {
                 self.ventana = Some(Ventana::Atajos);
             }
             ui.separator();
-            if opcion(ui, "Buscar actualizaciones", "") {
+            // En el navegador siempre está la última versión
+            if !WEB && opcion(ui, "Buscar actualizaciones", "") {
                 self.ventana = Some(Ventana::Actualizar);
             }
             if opcion(ui, "Reportar un problema", "") {
@@ -2079,6 +2118,7 @@ impl Interfaz {
         };
 
         let archivo = self.proyecto.actual().nombre.clone();
+        let cuadradas = self.cuadradas.entry(archivo.clone()).or_default();
         let posiciones = self.proyecto.posiciones.entry(archivo).or_default();
         // También la capa del dibujo y cuántas figuras son la cuadrícula (para el SVG)
         let (capa, cuadricula, dibujo) = ui
@@ -2101,6 +2141,7 @@ impl Interfaz {
                             &mut self.entradas,
                             posiciones,
                             &self.ondas,
+                            cuadradas,
                         );
                         (capa, cuadricula, dibujo)
                     })
@@ -2131,7 +2172,7 @@ impl Interfaz {
                     })
                 });
                 let texto = svg(&figuras, c.fondo);
-                let resultado = std::fs::write(ruta, texto)
+                let resultado = plataforma::escribir(ruta, texto.as_bytes())
                     .map(|()| format!("Exportado: {}", ruta.display()))
                     .map_err(|e| format!("No se pudo exportar {}: {e}", ruta.display()));
                 let _ = self.captura.0.send(resultado);
@@ -2547,7 +2588,12 @@ fn capturar(ctx: &egui::Context, rect: Rect, ruta: PathBuf, envio: mpsc::Sender<
         let [ancho, alto] = recorte.size.map(|n| n as u32);
         let resultado = image::RgbaImage::from_raw(ancho, alto, recorte.as_raw().to_vec())
             .ok_or_else(|| "la captura salió vacía".to_string())
-            .and_then(|img| img.save(&ruta).map_err(|e| e.to_string()))
+            .and_then(|img| {
+                let mut png = std::io::Cursor::new(Vec::new());
+                img.write_to(&mut png, image::ImageFormat::Png)
+                    .map_err(|e| e.to_string())?;
+                plataforma::escribir(&ruta, png.get_ref()).map_err(|e| e.to_string())
+            })
             .map(|()| format!("Exportado: {}", ruta.display()))
             .map_err(|e| format!("No se pudo exportar {}: {e}", ruta.display()));
         let _ = envio.send(resultado);
@@ -2932,6 +2978,9 @@ fn descripcion(red: &Netlist, pieza: Pieza) -> String {
             match inst.split {
                 Some(Split::Separa) => format!("split: separa {} bits", inst.salidas.len()),
                 Some(Split::Junta) => format!("split: junta {} bits", inst.entradas.len()),
+                None if matches!(visor_de(red, g), Some(Visor::Matrix(..))) => {
+                    format!("{}: matrix (click para cambiar a cuadrados o círculos)", inst.nombre)
+                }
                 None => format!("{}: {}", inst.nombre, inst.circuito),
             }
         }
@@ -3001,6 +3050,7 @@ fn dibujar(
     entradas: &mut [bool],
     posiciones: &mut Posiciones,
     ondas: &VecDeque<Vec<Valor>>,
+    cuadradas: &mut HashSet<String>,
 ) -> Dibujo {
     let c = paleta(ui);
     let p = ui.painter().clone();
@@ -3017,6 +3067,13 @@ fn dibujar(
     let primera_caja = piezas.len();
     piezas.extend((0..red.instancias.len()).map(Pieza::Caja));
     let total = piezas.len();
+    // El visor de cada caja, buscado una sola vez por cuadro
+    let mut visores: Vec<Option<Visor>> = vec![None; red.instancias.len()];
+    for n in &red.nodos {
+        if let (Tipo::Visor(v, _), Some(g)) = (&n.tipo, n.instancia) {
+            visores[g].get_or_insert(*v);
+        }
+    }
     let mut pieza_de = vec![0; red.nodos.len()];
     for (j, pieza) in piezas.iter().enumerate() {
         if let Pieza::Nodo(i) = *pieza {
@@ -3046,11 +3103,12 @@ fn dibujar(
             }
             let ancho = (inst.circuito.len() as f32 * 7.0 + 20.0).max(96.0);
             let alto = (pines as f32 * 18.0 + 30.0).max(48.0);
-            match visor_de(red, g) {
+            match visores[g] {
                 Some(Visor::Probe) => vec2(200.0, alto),
+                // Los LEDs llenan la caja; filas a la izquierda y columnas arriba
                 Some(Visor::Matrix(f, c)) => vec2(
-                    ancho.max(34.0 + CELDA * c as f32),
-                    alto.max(34.0 + CELDA * f as f32),
+                    ETIQUETAS + CELDA * c as f32 + MARGEN,
+                    ARRIBA + CELDA * f as f32 + MARGEN,
                 ),
                 _ => vec2(ancho, alto),
             }
@@ -3104,6 +3162,13 @@ fn dibujar(
             ui.scope_id().with(&clave),
             Sense::click_and_drag(),
         );
+        // Click en una matriz: círculos o cuadrados
+        if r.clicked()
+            && matches!(pieza, Pieza::Caja(g) if matches!(visores[g], Some(Visor::Matrix(..))))
+            && !cuadradas.remove(&clave)
+        {
+            cuadradas.insert(clave.clone());
+        }
         if r.drag_started() {
             dibujo.antes = Some(posiciones.clone());
         }
@@ -3156,11 +3221,32 @@ fn dibujar(
             }
         }
     };
+    // Matriz de la pieza `j`, si lo es: (filas, columnas, modo Individual)
+    let matriz = |j: usize| match piezas[j] {
+        Pieza::Caja(g) => match visores[g] {
+            Some(Visor::Matrix(f, cols)) => {
+                Some((f, cols, individual(f, cols, red.instancias[g].entradas.len())))
+            }
+            _ => None,
+        },
+        Pieza::Nodo(_) => None,
+    };
     // Dónde llega la entrada `k` de la pieza `j`
     let pin_entrada = |j: usize, k: usize| {
         let r = caja(j);
         if matches!(piezas[j], Pieza::Caja(g) if red.instancias[g].split == Some(Split::Separa)) {
             return r.left_center();
+        }
+        // Como en LogicCircuit: cada fila llega por la izquierda y cada columna por
+        // arriba; en modo Individual, los bits de cada fila llegan juntos a su pin
+        if let Some((f, cols, individual)) = matriz(j) {
+            let rej = rejilla_matriz(r, f, cols);
+            let k = if individual { k / cols } else { k };
+            return if k < f {
+                pos2(r.left(), rej.top() + CELDA * (k as f32 + 0.5))
+            } else {
+                pos2(rej.left() + CELDA * ((k - f) as f32 + 0.5), r.top())
+            };
         }
         let n = fuentes[j].len();
         let y = altura_pin(r, k, n);
@@ -3189,7 +3275,12 @@ fn dibujar(
         for (k, &fuente) in fs.iter().enumerate() {
             let a = pin_salida(fuente);
             let b = pin_entrada(j, k);
-            let puntos = if b.x > a.x + 12.0 {
+            let puntos = if matriz(j).is_some_and(|(f, _, ind)| !ind && k >= f) {
+                // Columna de la matriz: sube por encima de la caja y baja al pin
+                let x = (caja(j).left() - 14.0 - 5.0 * k as f32).max(a.x + 6.0);
+                let y = b.y - 10.0 - 6.0 * k as f32;
+                vec![a, pos2(x, a.y), pos2(x, y), pos2(b.x, y), b]
+            } else if b.x > a.x + 12.0 {
                 let x = (b.x - 14.0 - 5.0 * k as f32).max(a.x + 6.0);
                 vec![a, pos2(x, a.y), pos2(x, b.y), b]
             } else {
@@ -3241,8 +3332,8 @@ fn dibujar(
             Pieza::Caja(g) => {
                 // Caja con el nombre del circuito, la instancia arriba y los pines rotulados
                 let inst = &red.instancias[g];
+                let visor = visores[g];
                 let pequeno = FontId::monospace(10.0);
-                p.rect(r, 6.0, c.panel, trazo, StrokeKind::Inside);
                 p.text(
                     r.center_top() - vec2(0.0, 4.0),
                     Align2::CENTER_BOTTOM,
@@ -3250,6 +3341,14 @@ fn dibujar(
                     FontId::monospace(11.0),
                     c.tenue,
                 );
+                // La matriz se dibuja como un módulo de hardware, sin la caja de siempre
+                if let Some(Visor::Matrix(filas, columnas)) = visor {
+                    let luces: Vec<Valor> = inst.entradas.iter().map(|e| valor(e.1)).collect();
+                    let cuadrada = cuadradas.contains(&clave(red, pieza));
+                    dibujar_matriz(&p, r, filas, columnas, &luces, cuadrada);
+                    continue;
+                }
+                p.rect(r, 6.0, c.panel, trazo, StrokeKind::Inside);
                 p.text(
                     r.center_top() + vec2(0.0, 5.0),
                     Align2::CENTER_TOP,
@@ -3277,7 +3376,7 @@ fn dibujar(
                         c.tenue,
                     );
                 }
-                if let Some(visor) = visor_de(red, g) {
+                if let Some(visor) = visor {
                     let bits: Vec<usize> = inst.entradas.iter().map(|e| e.1).collect();
                     dibujar_visor(&p, c, r, visor, &bits, &valor, ondas);
                 }
@@ -3353,7 +3452,121 @@ fn dibujar(
 }
 
 /// Lado de cada LED de una `matrix`
-const CELDA: f32 = 14.0;
+const CELDA: f32 = 22.0;
+/// Espacio de los nombres de las filas (izquierda) y las columnas (arriba) de una
+/// `matrix`, y borde alrededor de sus LEDs
+const ETIQUETAS: f32 = 24.0;
+const ARRIBA: f32 = 18.0;
+const MARGEN: f32 = 3.0;
+
+/// Dónde van los LEDs dentro de la caja `r` de una `matrix`
+fn rejilla_matriz(r: Rect, filas: usize, columnas: usize) -> Rect {
+    Rect::from_min_size(
+        r.min + vec2(ETIQUETAS, ARRIBA),
+        vec2(CELDA * columnas as f32, CELDA * filas as f32),
+    )
+}
+
+/// Modo Individual de una `matrix` (un bit por LED) según cuántos bits recibe
+fn individual(filas: usize, columnas: usize, bits: usize) -> bool {
+    bits == filas * columnas && bits != filas + columnas
+}
+
+/// Una `matrix` como módulo de hardware: placa verde con pines dorados (filas a la
+/// izquierda, columnas arriba) y los LEDs en un bloque negro. Los colores son fijos,
+/// iguales en los dos temas. `luces` son sus pines: en modo Selector, primero las
+/// filas y después las columnas; en modo Individual, un bit por LED, fila por fila.
+fn dibujar_matriz(
+    p: &egui::Painter,
+    r: Rect,
+    filas: usize,
+    columnas: usize,
+    luces: &[Valor],
+    cuadrada: bool,
+) {
+    let placa = Color32::from_rgb(0x1f, 0x5c, 0x3c);
+    let borde_placa = Color32::from_rgb(0x15, 0x42, 0x2b);
+    let serigrafia = Color32::from_rgb(0xe8, 0xee, 0xe9);
+    let oro = Color32::from_rgb(0xd4, 0xa8, 0x3a);
+    let bloque = Color32::from_rgb(0x14, 0x15, 0x15);
+    let apagado = Color32::from_rgb(0x2c, 0x2e, 0x2d);
+    let encendido = Color32::from_rgb(0xff, 0x4a, 0x3a);
+    let brillo = Color32::from_rgba_unmultiplied(0xff, 0x4a, 0x3a, 70);
+    let reflejo = Color32::from_rgba_unmultiplied(255, 255, 255, 120);
+
+    let individual = individual(filas, columnas, luces.len());
+    let rejilla = rejilla_matriz(r, filas, columnas);
+
+    // Placa con un agujero de montaje en la esquina libre
+    p.rect(r, 3.0, placa, Stroke::new(1.5, borde_placa), StrokeKind::Inside);
+    p.circle(
+        r.left_top() + vec2(ETIQUETAS, ARRIBA) * 0.5,
+        3.0,
+        borde_placa,
+        Stroke::new(1.2, oro),
+    );
+
+    // Pines dorados en el borde, donde llegan los cables, y su nombre serigrafiado.
+    // En modo Individual solo hay pines de filas (cada uno con los bits de su fila)
+    let pines = if individual { filas } else { filas + columnas };
+    for k in 0..pines {
+        let nombre = if k < filas {
+            format!("F{k}")
+        } else {
+            format!("C{}", k - filas)
+        };
+        let (pin, texto, alinear) = if k < filas {
+            let y = rejilla.top() + CELDA * (k as f32 + 0.5);
+            (
+                Rect::from_min_size(pos2(r.left(), y - 2.0), vec2(6.0, 4.0)),
+                pos2(r.left() + 8.0, y),
+                Align2::LEFT_CENTER,
+            )
+        } else {
+            let x = rejilla.left() + CELDA * ((k - filas) as f32 + 0.5);
+            (
+                Rect::from_min_size(pos2(x - 2.0, r.top()), vec2(4.0, 5.0)),
+                pos2(x, r.top() + 6.0),
+                Align2::CENTER_TOP,
+            )
+        };
+        p.rect_filled(pin, 1.0, oro);
+        p.text(texto, alinear, nombre, FontId::monospace(8.0), serigrafia);
+    }
+
+    // Bloque negro de los LEDs. Como en LogicCircuit, solo cuenta el 1 (0, X y Z
+    // apagan): en modo Selector se enciende con su fila y su columna en 1; en modo
+    // Individual, con su propio bit
+    p.rect_filled(rejilla.expand(2.0), 2.0, bloque);
+    let uno = |i: usize| luces[i] == Valor::Uno;
+    for f in 0..filas {
+        for k in 0..columnas {
+            let prendido = if individual {
+                uno(f * columnas + k)
+            } else {
+                uno(f) && uno(filas + k)
+            };
+            let esquina = rejilla.min + vec2(k as f32, f as f32) * CELDA;
+            let celda = Rect::from_min_size(esquina, Vec2::splat(CELDA)).shrink(2.5);
+            let color = if prendido { encendido } else { apagado };
+            if cuadrada {
+                if prendido {
+                    p.rect_filled(celda.expand(2.0), 4.0, brillo);
+                }
+                p.rect_filled(celda, 2.0, color);
+            } else {
+                let radio = celda.width() / 2.0;
+                if prendido {
+                    p.circle_filled(celda.center(), radio + 2.0, brillo);
+                }
+                p.circle_filled(celda.center(), radio, color);
+            }
+            if prendido {
+                p.circle_filled(celda.min + Vec2::splat(celda.width() * 0.3), 1.6, reflejo);
+            }
+        }
+    }
+}
 
 /// El visor (display, matriz o sonda) que se dibuja en la caja `g`
 fn visor_de(red: &Netlist, g: usize) -> Option<Visor> {
@@ -3363,7 +3576,7 @@ fn visor_de(red: &Netlist, g: usize) -> Option<Visor> {
     })
 }
 
-/// El contenido de la caja de un visor: los segmentos, los LEDs o las ondas.
+/// El contenido de la caja de un display o una sonda: los segmentos o las ondas.
 /// `bits` son los nodos de sus pines, en orden.
 fn dibujar_visor(
     p: &egui::Painter,
@@ -3414,27 +3627,6 @@ fn dibujar_visor(
             }
             p.circle_filled(br + vec2(7.0, -2.0), 3.0, luz(valor(bits[7])));
         }
-        Visor::Matrix(filas, columnas) => {
-            let lado = (area.width() / columnas as f32)
-                .min(area.height() / filas as f32)
-                .min(CELDA);
-            let rejilla = Rect::from_center_size(
-                area.center(),
-                vec2(lado * columnas as f32, lado * filas as f32),
-            );
-            // ponytail: un LED se enciende con su fila y su columna en 1 (sin multiplexado)
-            for f in 0..filas {
-                for k in 0..columnas {
-                    let v = match (valor(bits[f]), valor(bits[filas + k])) {
-                        (Valor::Uno, Valor::Uno) => Valor::Uno,
-                        (Valor::Cero, _) | (_, Valor::Cero) => Valor::Cero,
-                        _ => Valor::X,
-                    };
-                    let centro = rejilla.min + vec2(k as f32 + 0.5, f as f32 + 0.5) * lado;
-                    p.circle(centro, lado * 0.38, luz(v), Stroke::new(0.8, c.tenue));
-                }
-            }
-        }
         // Una línea por señal, la muestra más nueva a la derecha
         Visor::Probe => {
             let ancho = area.width() / MUESTRAS as f32;
@@ -3462,7 +3654,8 @@ fn dibujar_visor(
                 }
             }
         }
-        Visor::Led => {}
+        // La matriz se dibuja aparte y el LED va suelto
+        Visor::Matrix(..) | Visor::Led => {}
     }
 }
 
@@ -3656,13 +3849,6 @@ fn boton(ui: &mut egui::Ui, texto: &str, icono: Icono, principal: bool) -> egui:
         }
     }
     r
-}
-
-/// Diálogo de archivos que solo muestra los `.SA`
-fn dialogo(titulo: &str) -> rfd::FileDialog {
-    rfd::FileDialog::new()
-        .set_title(titulo)
-        .add_filter("Circuito de LogicSM (.SA)", &["SA", "sa"])
 }
 
 #[cfg(test)]

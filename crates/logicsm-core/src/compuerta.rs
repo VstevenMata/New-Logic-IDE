@@ -86,29 +86,32 @@ impl Compuerta {
     /// Una entrada en Z se lee como X. Un 0 decide un AND y un 1 decide un OR
     /// aunque las demás sean X.
     pub fn evaluar(self, entradas: &[Valor]) -> Valor {
-        let bits: Option<Vec<bool>> = entradas.iter().map(|v| v.bit()).collect();
-        let hay = |b: bool| entradas.contains(&Valor::de(b));
+        self.evaluar_con(entradas.iter().copied())
+    }
+
+    /// Como `evaluar`, pero recorre las entradas sin juntarlas en un vector: el
+    /// simulador lo llama por cada compuerta que cambia
+    pub fn evaluar_con(self, e: impl Iterator<Item = Valor> + Clone) -> Valor {
+        let hay = |v: Valor| e.clone().any(|x| x == v);
+        let son_bits = || e.clone().all(|x| x.bit().is_some());
+        let primera = || e.clone().next().unwrap_or(Valor::X);
         match self {
-            And => match bits {
-                _ if hay(false) => Valor::Cero,
-                Some(_) => Valor::Uno,
-                None => Valor::X,
-            },
-            Or => match bits {
-                _ if hay(true) => Valor::Uno,
-                Some(_) => Valor::Cero,
-                None => Valor::X,
-            },
-            Xor => bits.map_or(Valor::X, |b| {
-                Valor::de(b.iter().filter(|&&x| x).count() % 2 == 1)
-            }),
-            Nand => And.evaluar(entradas).no(),
-            Nor => Or.evaluar(entradas).no(),
-            Xnor => Xor.evaluar(entradas).no(),
-            Not => entradas[0].no(),
-            Buffer => entradas[0].no().no(),
-            Tristate => match entradas[1] {
-                Valor::Uno => entradas[0].no().no(),
+            And if hay(Valor::Cero) => Valor::Cero,
+            Or if hay(Valor::Uno) => Valor::Uno,
+            And | Or if !son_bits() => Valor::X,
+            And => Valor::Uno,
+            Or => Valor::Cero,
+            Xor => e
+                .clone()
+                .try_fold(false, |paridad, x| Some(paridad ^ x.bit()?))
+                .map_or(Valor::X, Valor::de),
+            Nand => And.evaluar_con(e.clone()).no(),
+            Nor => Or.evaluar_con(e.clone()).no(),
+            Xnor => Xor.evaluar_con(e.clone()).no(),
+            Not => primera().no(),
+            Buffer => primera().no().no(),
+            Tristate => match e.clone().nth(1).unwrap_or(Valor::X) {
+                Valor::Uno => primera().no().no(),
                 Valor::Cero => Valor::Z,
                 _ => Valor::X,
             },

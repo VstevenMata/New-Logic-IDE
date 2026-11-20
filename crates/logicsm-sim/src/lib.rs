@@ -17,6 +17,10 @@ pub struct Estado {
     /// Nodos por recalcular en el próximo paso, sin repetir
     pendientes: Vec<usize>,
     en_pendientes: Vec<bool>,
+    /// Listas que se reusan en cada paso para no pedir memoria: la de pendientes que
+    /// se está calculando y los valores nuevos
+    repuesto: Vec<usize>,
+    nuevos: Vec<Valor>,
     /// Contenido de cada RAM (vacío en las ROM)
     ram: Vec<Vec<u64>>,
     /// Último valor del reloj de cada memoria, para escribir en el flanco de subida
@@ -121,18 +125,24 @@ impl Estado {
             return false;
         }
         // Todos se calculan con los valores de antes y después cambian juntos
-        let pendientes = std::mem::take(&mut self.pendientes);
-        let mut nuevos = Vec::with_capacity(pendientes.len());
+        let mut pendientes = std::mem::take(&mut self.pendientes);
+        self.pendientes = std::mem::take(&mut self.repuesto);
+        let mut nuevos = std::mem::take(&mut self.nuevos);
+        nuevos.clear();
         for &i in &pendientes {
             self.en_pendientes[i] = false;
             nuevos.push(self.calcular(red, i));
         }
-        for (&i, v) in pendientes.iter().zip(nuevos) {
+        for (&i, &v) in pendientes.iter().zip(&nuevos) {
             if self.valores[i] != v {
                 self.valores[i] = v;
                 self.agendar(red, i);
             }
         }
+        // Las dos listas vuelven para reusar su memoria en el próximo paso
+        pendientes.clear();
+        self.repuesto = pendientes;
+        self.nuevos = nuevos;
         self.tiempo += 1;
         true
     }
@@ -154,8 +164,8 @@ impl Estado {
         match nodo.tipo {
             Tipo::Salida(_) => v(0),
             Tipo::Compuerta(c) => {
-                let e: Vec<Valor> = nodo.entradas.iter().map(|&e| self.valores[e]).collect();
-                c.evaluar(&e)
+                let valores = &self.valores;
+                c.evaluar_con(nodo.entradas.iter().map(|&e| valores[e]))
             }
             // Ninguno conduce: Z; uno solo, o todos de acuerdo: ese valor; si no, X
             Tipo::Bus => nodo

@@ -1,0 +1,5 @@
+# Versión web: `trunk serve` la abre en http://localhost:8080 y `trunk build --release`
+# la deja en dist/ (el release la publica en GitHub Pages)
+[build]
+target = "apps/desktop/index.html"
+dist = "dist"

@@ -136,7 +136,7 @@ Si un circuito con `in`/`button`/`clock` se usa dentro de otro, esas entradas se
 | Salida              | `out Y;`                                 | Pin de salida del circuito          |
 | LED                 | `led L(Q);`                              | Encendido cuando Q = 1              |
 | Display 7 segmentos | `display7 D(a, b, c, d, e, f, g, dp);`   | Una señal por segmento              |
-| Matriz de LEDs      | `matrix M(8, 8, filas, cols);`           | Pantalla de puntos                  |
+| Matriz de LEDs      | `matrix M(8, 8, filas, cols);`           | Como en LogicCircuit: un bit por fila y uno por columna (se enciende con los dos en 1), o un bit por LED (64 bits) |
 | Sonda / osciloscopio| `probe P(CLK, Q);`                       | Diagrama de ondas en el tiempo      |
 
 ### Compuertas y componentes internos

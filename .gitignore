@@ -11,3 +11,6 @@ target/
 
 result
 CLAUDE.md
+
+# Versión web compilada por trunk
+dist/

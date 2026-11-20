@@ -7,12 +7,20 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-arboard = { version = "3.7.0", default-features = false }
 eframe = { version = "0.37.0", features = ["persistence"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 logicsm-core.workspace = true
 logicsm-sim.workspace = true
 rfd = { version = "0.18.0", default-features = false, features = ["xdg-portal"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+arboard = { version = "3.7.0", default-features = false }
+
+# Versión web: descargar archivos y arrancar la app en el navegador
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3.107"
+wasm-bindgen-futures = "0.4.80"
+web-sys = { version = "0.3.107", features = ["HtmlAnchorElement", "Url"] }
 
 [target."cfg(windows)".build-dependencies]
 winresource = "0.1.34"
