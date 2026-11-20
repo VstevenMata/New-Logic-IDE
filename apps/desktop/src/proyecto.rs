@@ -90,10 +90,15 @@ impl Proyecto {
 
     pub fn abrir(ruta: PathBuf) -> std::io::Result<Self> {
         let texto = std::fs::read_to_string(&ruta)?;
+        Ok(Self::leido(ruta, &texto))
+    }
+
+    /// El proyecto guardado en `ruta`, ya leído (en el navegador `ruta` es solo el nombre)
+    pub fn leido(ruta: PathBuf, texto: &str) -> Self {
         let nombre = ruta.file_stem().unwrap_or_default().to_string_lossy();
-        let mut p = Self::desde_texto(&texto, &nombre);
+        let mut p = Self::desde_texto(texto, &nombre);
         p.ruta = Some(ruta);
-        Ok(p)
+        p
     }
 
     fn desde_texto(texto: &str, nombre: &str) -> Self {
@@ -194,7 +199,7 @@ impl Proyecto {
                 .ok_or("Elige dónde guardar el proyecto.")?,
         };
         let texto = self.texto();
-        std::fs::write(&ruta, &texto)
+        crate::plataforma::escribir(&ruta, texto.as_bytes())
             .map_err(|e| format!("No se pudo guardar {}: {e}", ruta.display()))?;
         for a in &mut self.archivos {
             a.guardado = a.codigo.clone();

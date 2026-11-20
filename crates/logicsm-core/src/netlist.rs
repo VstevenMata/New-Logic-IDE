@@ -1054,6 +1054,14 @@ impl<'a> Elaborador<'a> {
                     .map(String::from)
                     .to_vec(),
             ),
+            // Como en LogicCircuit: modo Selector (un bit por fila y uno por columna)
+            // o modo Individual (un bit por LED, fila por fila)
+            Visor::Matrix(f, c) if bits.len() == f * c => (
+                f * c,
+                (0..f * c)
+                    .map(|k| format!("F{}C{}", k / c, k % c))
+                    .collect(),
+            ),
             Visor::Matrix(f, c) => (
                 f + c,
                 (0..f)
@@ -1066,6 +1074,10 @@ impl<'a> Elaborador<'a> {
         if bits.len() != esperados {
             let detalle = match tipo {
                 Visor::Display7 => ": a, b, c, d, e, f, g y dp".to_string(),
+                Visor::Matrix(f, c) if f * c != f + c => format!(
+                    ": {f} filas y {c} columnas (o {}, uno por LED)",
+                    en_bits(f * c)
+                ),
                 Visor::Matrix(f, c) => format!(": {f} filas y {c} columnas"),
                 _ => String::new(),
             };
@@ -1727,6 +1739,13 @@ mod tests {
             con("matrix M(2, 2, A, B);"),
             ["`matrix` lleva 4 bits: 2 filas y 2 columnas, pero recibe 3 bits"]
         );
+        assert_eq!(
+            con("matrix M(2, 3, A, B);"),
+            [
+                "`matrix` lleva 5 bits: 2 filas y 3 columnas (o 6 bits, uno por LED), pero recibe 3 bits"
+            ]
+        );
+        assert!(compilar("main { in A[2], B; matrix M(1, 3, A, B); }").is_ok());
         assert_eq!(
             con("led B(B);"),
             ["`B` ya tiene un valor: cada nombre se usa una sola vez"]

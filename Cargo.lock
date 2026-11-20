@@ -1795,20 +1795,23 @@ checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 
 [[package]]
 name = "logicsm"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "arboard",
  "eframe",
  "image",
+ "js-sys",
  "logicsm-core",
  "logicsm-sim",
  "rfd",
+ "wasm-bindgen-futures",
+ "web-sys",
  "winresource",
 ]
 
 [[package]]
 name = "logicsm-cli"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "logicsm-core",
  "logicsm-sim",
@@ -1816,11 +1819,11 @@ dependencies = [
 
 [[package]]
 name = "logicsm-core"
-version = "0.6.0"
+version = "0.7.0"
 
 [[package]]
 name = "logicsm-sim"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "logicsm-core",
 ]

@@ -1,0 +1,29 @@
+<!doctype html>
+<!-- Página de la versión web: trunk compila apps/desktop a WebAssembly y la app dibuja en el canvas -->
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LogicSM</title>
+    <!-- wasm-opt -O4 solo en release: el .wasm más rápido -->
+    <link data-trunk rel="rust" href="Cargo.toml" data-bin="logicsm" data-wasm-opt="4" />
+    <link data-trunk rel="icon" href="../../assets/logo.png" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #f8f8f5;
+      }
+      canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="logicsm"></canvas>
+  </body>
+</html>

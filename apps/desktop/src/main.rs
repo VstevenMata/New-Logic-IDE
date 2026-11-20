@@ -1,15 +1,16 @@
-//! LogicSM: el IDE de escritorio (editor, lienzo del circuito y paneles).
+//! LogicSM: el IDE (editor, lienzo del circuito y paneles), de escritorio o en el navegador.
 // Sin ventana de consola extra al abrirlo en Windows
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod ayuda;
+#[cfg(not(target_arch = "wasm32"))]
 mod comandos;
 mod interfaz;
+mod plataforma;
 mod proyecto;
 
-use eframe::egui;
-use std::path::PathBuf;
-use std::process::ExitCode;
+#[cfg(not(target_arch = "wasm32"))]
+use std::{path::PathBuf, process::ExitCode};
 
 /// Logo de la app: ícono de la ventana y barra superior
 pub const LOGO: &[u8] = include_bytes!("../../../assets/logo.png");
@@ -19,6 +20,7 @@ pub const ICONO_SA: &[u8] = include_bytes!("../../../assets/archivo.png");
 
 // logicsm (o logicsm open) abre la ventana y logicsm Proyecto.SA abre ese proyecto (doble click
 // en el explorador); logicsm update | delete | help son comandos de terminal
+#[cfg(not(target_arch = "wasm32"))]
 fn main() -> ExitCode {
     let resultado = match std::env::args().nth(1).as_deref() {
         None | Some("open") => ventana(None),
@@ -35,9 +37,10 @@ fn main() -> ExitCode {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn ventana(proyecto: Option<PathBuf>) -> eframe::Result {
     let opciones = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
+        viewport: eframe::egui::ViewportBuilder::default()
             .with_title("LogicSM")
             // Igual al nombre de logicsm.desktop: así Linux (Wayland) le pone el ícono correcto
             .with_app_id("logicsm")
@@ -56,4 +59,31 @@ fn ventana(proyecto: Option<PathBuf>) -> eframe::Result {
             Ok(Box::new(interfaz::Interfaz::nueva(cc, proyecto)))
         }),
     )
+}
+
+/// En el navegador: dibuja en el `<canvas id="logicsm">` de index.html
+#[cfg(target_arch = "wasm32")]
+fn main() {
+    use eframe::wasm_bindgen::JsCast;
+    use eframe::web_sys;
+    let lienzo = web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.get_element_by_id("logicsm"))
+        .and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok())
+        .expect("index.html tiene un <canvas id=\"logicsm\">");
+    wasm_bindgen_futures::spawn_local(async move {
+        let inicio = eframe::WebRunner::new()
+            .start(
+                lienzo,
+                eframe::WebOptions::default(),
+                Box::new(|cc| {
+                    interfaz::estilo(&cc.egui_ctx);
+                    Ok(Box::new(interfaz::Interfaz::nueva(cc, None)))
+                }),
+            )
+            .await;
+        if let Err(e) = inicio {
+            web_sys::console::error_1(&e);
+        }
+    });
 }
