@@ -2979,7 +2979,10 @@ fn descripcion(red: &Netlist, pieza: Pieza) -> String {
                 Some(Split::Separa) => format!("split: separa {} bits", inst.salidas.len()),
                 Some(Split::Junta) => format!("split: junta {} bits", inst.entradas.len()),
                 None if matches!(visor_de(red, g), Some(Visor::Matrix(..))) => {
-                    format!("{}: matrix (click para cambiar a cuadrados o círculos)", inst.nombre)
+                    format!(
+                        "{}: matrix (click para cambiar a cuadrados o círculos)",
+                        inst.nombre
+                    )
                 }
                 None => format!("{}: {}", inst.nombre, inst.circuito),
             }
@@ -3224,9 +3227,11 @@ fn dibujar(
     // Matriz de la pieza `j`, si lo es: (filas, columnas, modo Individual)
     let matriz = |j: usize| match piezas[j] {
         Pieza::Caja(g) => match visores[g] {
-            Some(Visor::Matrix(f, cols)) => {
-                Some((f, cols, individual(f, cols, red.instancias[g].entradas.len())))
-            }
+            Some(Visor::Matrix(f, cols)) => Some((
+                f,
+                cols,
+                individual(f, cols, red.instancias[g].entradas.len()),
+            )),
             _ => None,
         },
         Pieza::Nodo(_) => None,
@@ -3498,7 +3503,13 @@ fn dibujar_matriz(
     let rejilla = rejilla_matriz(r, filas, columnas);
 
     // Placa con un agujero de montaje en la esquina libre
-    p.rect(r, 3.0, placa, Stroke::new(1.5, borde_placa), StrokeKind::Inside);
+    p.rect(
+        r,
+        3.0,
+        placa,
+        Stroke::new(1.5, borde_placa),
+        StrokeKind::Inside,
+    );
     p.circle(
         r.left_top() + vec2(ETIQUETAS, ARRIBA) * 0.5,
         3.0,

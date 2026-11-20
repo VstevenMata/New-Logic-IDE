@@ -1058,7 +1058,9 @@ impl<'a> Elaborador<'a> {
             // o modo Individual (un bit por LED, fila por fila)
             Visor::Matrix(f, c) if bits.len() == f * c => (
                 f * c,
-                (0..f * c).map(|k| format!("F{}C{}", k / c, k % c)).collect(),
+                (0..f * c)
+                    .map(|k| format!("F{}C{}", k / c, k % c))
+                    .collect(),
             ),
             Visor::Matrix(f, c) => (
                 f + c,
@@ -1739,7 +1741,9 @@ mod tests {
         );
         assert_eq!(
             con("matrix M(2, 3, A, B);"),
-            ["`matrix` lleva 5 bits: 2 filas y 3 columnas (o 6 bits, uno por LED), pero recibe 3 bits"]
+            [
+                "`matrix` lleva 5 bits: 2 filas y 3 columnas (o 6 bits, uno por LED), pero recibe 3 bits"
+            ]
         );
         assert!(compilar("main { in A[2], B; matrix M(1, 3, A, B); }").is_ok());
         assert_eq!(
