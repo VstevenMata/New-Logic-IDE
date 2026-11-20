@@ -169,6 +169,34 @@ enum Ventana {
     Acerca,
 }
 
+/// En pantallas angostas (celular) se ve una parte a la vez, elegida abajo
+#[derive(Clone, Copy, PartialEq)]
+enum Vista {
+    Proyecto,
+    Codigo,
+    Circuito,
+    Senales,
+    Abajo,
+}
+
+impl Vista {
+    const TODAS: [(Vista, &str); 5] = [
+        (Vista::Proyecto, "Proyecto"),
+        (Vista::Codigo, "Código"),
+        (Vista::Circuito, "Circuito"),
+        (Vista::Senales, "Entradas"),
+        (Vista::Abajo, "Salida"),
+    ];
+}
+
+/// Más angosto que esto (en puntos) se usa la pantalla de celular
+const ANCHO_MOVIL: f32 = 700.0;
+
+/// Ancho de una ventana emergente: `ancho`, o menos si la pantalla no alcanza
+fn ancho_modal(ui: &egui::Ui, ancho: f32) -> f32 {
+    ancho.min(ui.ctx().content_rect().width() - 48.0)
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum Pestana {
     Problemas,
@@ -232,6 +260,9 @@ pub struct Interfaz {
     ver_proyecto: bool,
     ver_senales: bool,
     ver_inferior: bool,
+    /// Pantalla angosta: una parte a la vez (`parte`) en lugar de paneles
+    movil: bool,
+    parte: Vista,
     ventana: Option<Ventana>,
     /// Acción esperando confirmación porque hay cambios sin guardar
     confirmar: Option<Accion>,
@@ -379,6 +410,8 @@ impl Interfaz {
             ver_proyecto: true,
             ver_senales: true,
             ver_inferior: true,
+            movil: false,
+            parte: Vista::Codigo,
             ventana: None,
             confirmar: None,
             borrar: None,
@@ -859,7 +892,7 @@ impl Interfaz {
             let nombre = self.proyecto.archivos[i].nombre.clone();
             let mut eliminar = None;
             let r = egui::Modal::new(egui::Id::unique("borrar")).show(ctx, |ui| {
-                ui.set_width(340.0);
+                ui.set_width(ancho_modal(ui, 340.0));
                 ui.label(
                     RichText::new(format!("¿Eliminar {nombre}?"))
                         .size(14.0)
@@ -902,7 +935,7 @@ impl Interfaz {
         }
         let mut respuesta = None;
         let r = egui::Modal::new(egui::Id::unique("confirmar")).show(ctx, |ui| {
-            ui.set_width(340.0);
+            ui.set_width(ancho_modal(ui, 340.0));
             ui.label(RichText::new("Hay cambios sin guardar").size(14.0).strong());
             ui.add_space(4.0);
             ui.label("¿Quieres guardarlos antes de continuar?");
@@ -950,7 +983,7 @@ impl Interfaz {
         // (con ×, Esc o un click afuera)
         let mut cerrar = false;
         let r = egui::Modal::new(egui::Id::unique("ventana_ayuda")).show(ctx, |ui| {
-            ui.set_width(560.0);
+            ui.set_width(ancho_modal(ui, 560.0));
             ui.horizontal(|ui| {
                 ui.label(RichText::new(titulo).size(15.0).strong());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1027,13 +1060,14 @@ impl eframe::App for Interfaz {
             }
         }
         let c = paleta(ui);
+        self.movil = ui.available_width() < ANCHO_MOVIL;
         egui::Panel::top("barra")
             .exact_size(48.0)
             .resizable(false)
             .frame(
                 Frame::new()
                     .fill(c.panel)
-                    .inner_margin(Margin::symmetric(14, 0)),
+                    .inner_margin(Margin::symmetric(if self.movil { 8 } else { 14 }, 0)),
             )
             .show(ui, |ui| self.barra_superior(ui));
         if self.sin_proyecto {
@@ -1042,6 +1076,13 @@ impl eframe::App for Interfaz {
                 .show(ui, |ui| self.bienvenida(ui));
             self.ventanas(&ctx);
             self.confirmacion(&ctx);
+            return;
+        }
+        if self.movil {
+            self.pantalla_movil(ui, c);
+            self.ventanas(&ctx);
+            self.confirmacion(&ctx);
+            self.ventana_exportar(&ctx);
             return;
         }
         // Arrastrar el borde por debajo del mínimo oculta el panel; arrastrarlo de nuevo lo abre.
@@ -1150,7 +1191,7 @@ impl Interfaz {
             let formato = *formato;
             let mut listo = None;
             let r = egui::Modal::new(egui::Id::unique("exportar")).show(ctx, |ui| {
-                ui.set_width(340.0);
+                ui.set_width(ancho_modal(ui, 340.0));
                 ui.label(RichText::new(formato.titulo()).size(14.0).strong());
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
@@ -1217,7 +1258,7 @@ impl Interfaz {
         let formato = *formato;
         let mut reemplazar = None;
         let r = egui::Modal::new(egui::Id::unique("reemplazar")).show(ctx, |ui| {
-            ui.set_width(340.0);
+            ui.set_width(ancho_modal(ui, 340.0));
             ui.label(
                 RichText::new("Ya existen en esa carpeta")
                     .size(14.0)
@@ -1366,20 +1407,84 @@ impl Interfaz {
     }
 
     /// Logo, nombre y menú a la izquierda, controles de simulación y el tema a la derecha
+    /// Celular: pestañas abajo y una sola parte en el resto de la pantalla
+    fn pantalla_movil(&mut self, ui: &mut egui::Ui, c: &Paleta) {
+        egui::Panel::bottom("vistas")
+            .exact_size(52.0)
+            .resizable(false)
+            .frame(Frame::new().fill(c.panel))
+            .show(ui, |ui| {
+                ui.columns(Vista::TODAS.len(), |columnas| {
+                    for (ui, (vista, texto)) in columnas.iter_mut().zip(Vista::TODAS) {
+                        let elegida = self.parte == vista;
+                        let color = if elegida { c.tinta } else { c.tenue };
+                        let texto = RichText::new(texto).size(12.5).color(color);
+                        let r = ui.add_sized(
+                            vec2(ui.available_width(), 50.0),
+                            egui::Button::new(if elegida { texto.strong() } else { texto })
+                                .frame(false),
+                        );
+                        if elegida {
+                            let linea = Rect::from_min_size(
+                                r.rect.left_top() + vec2(8.0, 0.0),
+                                vec2(r.rect.width() - 16.0, 2.5),
+                            );
+                            ui.painter().rect_filled(linea, 1.0, c.salvia_borde);
+                        }
+                        if r.clicked() {
+                            self.parte = vista;
+                        }
+                    }
+                });
+            });
+        // Exportar PNG captura el lienzo: tiene que estar a la vista
+        let vista = if self.cola_png.is_empty() {
+            self.parte
+        } else {
+            Vista::Circuito
+        };
+        let (fondo, margen) = match vista {
+            Vista::Codigo => (c.codigo, Margin::ZERO),
+            Vista::Circuito => (c.fondo, Margin::ZERO),
+            Vista::Abajo => (c.panel, Margin::ZERO),
+            Vista::Proyecto | Vista::Senales => (c.panel, Margin::symmetric(14, 15)),
+        };
+        let zona = egui::CentralPanel::default()
+            .frame(Frame::new().fill(fondo).inner_margin(margen))
+            .show(ui, |ui| match vista {
+                Vista::Proyecto => self.panel_proyecto(ui),
+                Vista::Codigo => self.editor(ui),
+                Vista::Circuito => self.lienzo(ui),
+                Vista::Senales => self.senales(ui),
+                Vista::Abajo => self.pestanas(ui),
+            })
+            .response
+            .rect;
+        let ctx = ui.ctx().clone();
+        self.soltar_componente(&ctx, zona);
+    }
+
     fn barra_superior(&mut self, ui: &mut egui::Ui) {
+        // En el celular: los menús dentro de uno solo y los botones sin texto
+        let movil = self.movil;
+        let rotulo = |texto: &'static str| if movil { "" } else { texto };
         ui.horizontal_centered(|ui| {
             ui.image((self.logo.id(), vec2(22.0, 22.0)));
-            ui.label(RichText::new("LogicSM").size(14.0).strong());
-            ui.add_space(6.0);
-            self.menu(ui);
-            ui.add_space(6.0);
+            if movil {
+                ui.menu_button("Menú", |ui| self.menu(ui));
+            } else {
+                ui.label(RichText::new("LogicSM").size(14.0).strong());
+                ui.add_space(6.0);
+                self.menu(ui);
+            }
+            ui.add_space(if movil { 2.0 } else { 6.0 });
             ui.separator();
-            ui.add_space(6.0);
+            ui.add_space(if movil { 2.0 } else { 6.0 });
             let hay = self.hay_reloj();
             let (texto, icono) = if self.corriendo {
-                ("Pausa", Icono::Pausa)
+                (rotulo("Pausa"), Icono::Pausa)
             } else {
-                ("Ejecutar", Icono::Ejecutar)
+                (rotulo("Ejecutar"), Icono::Ejecutar)
             };
             let (ejecutar, paso) = if hay {
                 (
@@ -1399,7 +1504,9 @@ impl Interfaz {
                 self.ejecutar(ui.ctx());
             }
             if ui
-                .add_enabled_ui(hay, |ui| boton(ui, "Paso a paso", Icono::Paso, false))
+                .add_enabled_ui(hay, |ui| {
+                    boton(ui, rotulo("Paso a paso"), Icono::Paso, false)
+                })
                 .inner
                 .on_hover_text(paso)
                 .on_disabled_hover_text(paso)
@@ -1408,7 +1515,7 @@ impl Interfaz {
                 self.paso();
             }
             egui::ComboBox::from_id_salt("frecuencia")
-                .width(70.0)
+                .width(if movil { 58.0 } else { 70.0 })
                 .selected_text(hz(self.frecuencia))
                 .show_ui(ui, |ui| {
                     for f in FRECUENCIAS {
@@ -1417,7 +1524,7 @@ impl Interfaz {
                 })
                 .response
                 .on_hover_text("Frecuencia del reloj");
-            if boton(ui, "Reiniciar", Icono::Reiniciar, false)
+            if boton(ui, rotulo("Reiniciar"), Icono::Reiniciar, false)
                 .on_hover_text("Pone las entradas en 0 y borra la memoria")
                 .clicked()
             {
@@ -1431,8 +1538,12 @@ impl Interfaz {
                 } else {
                     ("Oscuro", Icono::Luna, Theme::Dark)
                 };
-                if boton(ui, texto, icono, false).clicked() {
+                if boton(ui, rotulo(texto), icono, false).clicked() {
                     ui.ctx().set_theme(otro);
+                }
+                // En el celular no hay paneles: las partes se eligen abajo
+                if movil {
+                    return;
                 }
                 ui.add_space(6.0);
                 // De derecha a izquierda: quedan en el orden del dibujo (izquierdo, abajo, derecho)
@@ -1488,6 +1599,7 @@ impl Interfaz {
             }
             if !self.sin_proyecto && opcion(ui, "Nuevo archivo", "") {
                 self.ver_proyecto = true;
+                self.parte = Vista::Proyecto;
                 self.nombrando = Some((None, String::new()));
                 self.error_nombre = None;
             }
@@ -1581,10 +1693,12 @@ impl Interfaz {
             if opcion(ui, "Tabla de verdad", "") {
                 self.pestana = Pestana::Tabla;
                 self.ver_inferior = true;
+                self.parte = Vista::Abajo;
             }
             if opcion(ui, "Ondas", "") {
                 self.pestana = Pestana::Ondas;
                 self.ver_inferior = true;
+                self.parte = Vista::Abajo;
             }
         });
         ui.menu_button("Ayuda", |ui| {
@@ -2082,6 +2196,7 @@ impl Interfaz {
 
     /// Click en Problemas: abre ese archivo con el cursor donde está el error
     fn ir_al_problema(&mut self, archivo: &str, byte: usize) {
+        self.parte = Vista::Codigo;
         let Some(i) = self
             .proyecto
             .archivos
