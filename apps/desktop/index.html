@@ -5,8 +5,16 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>LogicSM</title>
-    <!-- wasm-opt -O4 solo en release: el .wasm más rápido -->
-    <link data-trunk rel="rust" href="Cargo.toml" data-bin="logicsm" data-wasm-opt="4" />
+    <!-- wasm-opt -O4 solo en release: el .wasm más rápido. Se le dicen las funciones de
+         wasm que Rust ya usa por defecto; sin eso, wasm-opt rechaza memory.fill y otras -->
+    <link
+      data-trunk
+      rel="rust"
+      href="Cargo.toml"
+      data-bin="logicsm"
+      data-wasm-opt="4"
+      data-wasm-opt-params="--enable-bulk-memory --enable-bulk-memory-opt --enable-nontrapping-float-to-int --enable-sign-ext --enable-mutable-globals --enable-reference-types --enable-multivalue"
+    />
     <link data-trunk rel="icon" href="../../assets/logo.png" />
     <style>
       html,
