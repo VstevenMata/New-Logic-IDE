@@ -456,9 +456,9 @@ mod tests {
             let unos: Vec<usize> = (0..8).filter(|f| funcion >> f & 1 == 1).collect();
             let codigo = escribir("F", &entradas, &salidas, &[minimizar(3, &unos, &[])]);
             let tabla = Tabla::de(&logicsm_core::compilar(&codigo).unwrap());
-            for f in 0..8 {
+            for (f, fila) in tabla.filas.iter().enumerate() {
                 assert_eq!(
-                    tabla.filas[f],
+                    *fila,
                     [Valor::de(unos.contains(&f))],
                     "función {funcion:08b}, fila {f}: {codigo}"
                 );
