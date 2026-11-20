@@ -441,7 +441,13 @@ pub fn guia(ui: &mut egui::Ui) {
         "Arrastra un archivo .SA a la ventana para abrirlo; con un proyecto abierto, se agrega \
          y su circuito se declara en el archivo abierto.",
         "Arrastra un archivo de la lista Proyecto al código o al circuito para declararlo ahí.",
-        "La pestaña Tabla de verdad muestra todas las combinaciones de entradas.",
+        "La pestaña Tabla de verdad muestra todas las combinaciones de entradas. Llena la \
+         columna \"esperado\" (click en -) y te dice en qué fila falla tu circuito.",
+        "Con la columna \"esperado\" llena, \"Crear circuito desde lo esperado\" escribe el \
+         circuito más simple que la cumple, en un archivo nuevo.",
+        "\"Comparar con\" dice si el circuito abierto hace lo mismo que otro archivo y, si no, \
+         en qué combinación difieren.",
+        "Problemas avisa de las entradas que el circuito no usa.",
         "Con un clock en el circuito, Ejecutar (F5) lo hace latir con la frecuencia elegida \
          en la barra y Paso a paso (F10) avanza medio ciclo. Todos los clock laten juntos.",
         "Un pulsador vale 1 solo mientras lo mantienes presionado.",

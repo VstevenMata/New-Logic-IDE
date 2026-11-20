@@ -118,6 +118,9 @@ struct Elaborador<'a> {
     /// Cajas del principal (instancias, `split`, memorias y visores), con sus pines sin resolver
     instancias: Vec<Caja>,
     memorias: Vec<Molde>,
+    /// Instancias (ámbito, nombre) que no se pudieron crear: ya tienen su error y
+    /// sus usos (`m.Suma`) no lo repiten
+    fallidas: HashSet<(usize, String)>,
 }
 
 struct Caja {
@@ -158,6 +161,45 @@ fn bits_de(puertos: &[Puerto]) -> Vec<String> {
         .iter()
         .flat_map(|p| bits(&p.nombre.texto, p.ancho))
         .collect()
+}
+
+/// El nombre más parecido a `n` (a 2 letras o menos, sin contar mayúsculas), para
+/// "¿quisiste decir ...?"
+fn parecido<'n>(n: &str, nombres: impl Iterator<Item = &'n str>) -> Option<&'n str> {
+    let distancia = |a: &str, b: &str| {
+        let (a, b): (Vec<char>, Vec<char>) = (
+            a.to_lowercase().chars().collect(),
+            b.to_lowercase().chars().collect(),
+        );
+        // Levenshtein con una sola fila
+        let mut fila: Vec<usize> = (0..=b.len()).collect();
+        for (i, ca) in a.iter().enumerate() {
+            let mut diagonal = fila[0];
+            fila[0] = i + 1;
+            for (j, cb) in b.iter().enumerate() {
+                let arriba = fila[j + 1];
+                fila[j + 1] = (diagonal + usize::from(ca != cb))
+                    .min(arriba + 1)
+                    .min(fila[j] + 1);
+                diagonal = arriba;
+            }
+        }
+        fila[b.len()]
+    };
+    nombres
+        .filter(|&x| x != n)
+        .map(|x| (distancia(n, x), x))
+        .filter(|&(d, x)| d <= 2 && d < n.len().min(x.len()))
+        .min()
+        .map(|(_, x)| x)
+}
+
+/// "`X` no existe", con "¿quisiste decir ...?" si alguno de `nombres` se parece
+fn no_existe<'n>(n: &str, nombres: impl Iterator<Item = &'n str>) -> String {
+    match parecido(n, nombres) {
+        Some(x) => format!("`{n}` no existe; ¿quisiste decir `{x}`?"),
+        None => format!("`{n}` no existe: declárala con `in` o asígnale un valor"),
+    }
 }
 
 fn puerto<'c>(puertos: &'c [Puerto], nombre: &str) -> Option<&'c Puerto> {
@@ -271,6 +313,7 @@ pub fn elaborar(principal: &Circuito, circuitos: &[Circuito]) -> Result<Netlist,
         actual: None,
         instancias: Vec::new(),
         memorias: Vec::new(),
+        fallidas: HashSet::new(),
     };
     for c in circuitos {
         if e.circuitos.insert(&c.nombre.texto, c).is_some() {
@@ -340,8 +383,9 @@ pub fn elaborar(principal: &Circuito, circuitos: &[Circuito]) -> Result<Netlist,
 
 impl<'a> Elaborador<'a> {
     /// Un circuito usado varias veces (o un `for`) repetiría sus errores: se guardan una sola vez.
+    /// Los errores sin mensaje son usos de una instancia que falló: no se muestran.
     fn agregar(&mut self, err: Error) {
-        if !self.errores.contains(&err) {
+        if !err.mensaje.is_empty() && !self.errores.contains(&err) {
             self.errores.push(err);
         }
     }
@@ -364,10 +408,14 @@ impl<'a> Elaborador<'a> {
     /// El circuito `n` del proyecto, si existe y no se está copiando ya.
     fn circuito(&mut self, n: &Nombre) -> Option<&'a Circuito> {
         let Some(&c) = self.circuitos.get(n.texto.as_str()) else {
-            self.agregar(error(
-                format!("`{}` no es un circuito del proyecto", n.texto),
-                n.rango.clone(),
-            ));
+            let mensaje = match parecido(&n.texto, self.circuitos.keys().copied()) {
+                Some(x) => format!(
+                    "`{}` no es un circuito del proyecto; ¿quisiste decir `{x}`?",
+                    n.texto
+                ),
+                None => format!("`{}` no es un circuito del proyecto", n.texto),
+            };
+            self.agregar(error(mensaje, n.rango.clone()));
             return None;
         };
         if self.pila.contains(&c.nombre.texto.as_str()) {
@@ -581,6 +629,7 @@ impl<'a> Elaborador<'a> {
                 continue;
             }
             let Some(c) = self.circuito(circuito) else {
+                self.fallidas.insert((id, n.clone()));
                 continue;
             };
             let Some(cantidad) = cantidad else {
@@ -755,6 +804,10 @@ impl<'a> Elaborador<'a> {
                 ),
                 nombre.rango.clone(),
             )),
+            // Ya tiene su error donde se declaró
+            None if self.fallidas.contains(&(id, n.clone())) => {
+                Err(error(String::new(), nombre.rango.clone()))
+            }
             None => Err(error(
                 format!("`{n}` no es un circuito"),
                 nombre.rango.clone(),
@@ -775,7 +828,16 @@ impl<'a> Elaborador<'a> {
                         salida.texto, c.nombre.texto
                     )
                 } else {
-                    format!("`{}` no tiene la salida `{}`", c.nombre.texto, salida.texto)
+                    let nombres = c.salidas.iter().map(|p| p.nombre.texto.as_str());
+                    match parecido(&salida.texto, nombres) {
+                        Some(x) => format!(
+                            "`{}` no tiene la salida `{}`; ¿quisiste decir `{x}`?",
+                            c.nombre.texto, salida.texto
+                        ),
+                        None => {
+                            format!("`{}` no tiene la salida `{}`", c.nombre.texto, salida.texto)
+                        }
+                    }
                 };
                 return Err(error(mensaje, salida.rango.clone()));
             };
@@ -798,7 +860,7 @@ impl<'a> Elaborador<'a> {
         } else if let Some(m) = ambito.moldes.get(n) {
             format!("`{n}` es un molde de memoria: úsalo con `{n}({})`", uso(m))
         } else {
-            format!("`{n}` no existe: declárala con `in` o asígnale un valor")
+            no_existe(n, ambito.anchos.keys().map(String::as_str))
         };
         Err(error(mensaje, rango))
     }
@@ -879,9 +941,14 @@ impl<'a> Elaborador<'a> {
             }
             // Si no está anotada, ya se avisó por qué
             let Some(&c) = self.ambitos[id].tipos.get(n) else {
+                self.fallidas.insert((id, n.clone()));
                 return Ok(());
             };
-            return self.instanciar(id, n.clone(), c, circuito, args, vars);
+            let creada = self.instanciar(id, n.clone(), c, circuito, args, vars);
+            if creada.is_err() {
+                self.fallidas.insert((id, n.clone()));
+            }
+            return creada;
         }
 
         let antes = self.nodos.len();
@@ -1123,9 +1190,19 @@ impl<'a> Elaborador<'a> {
             } else {
                 "entradas"
             };
+            // `in Q[4]` es una sola entrada: se le pasa un bus entero, no sus bits sueltos
+            let pista = match c.entradas.iter().find(|p| p.ancho.is_some()) {
+                Some(p) if args.len() > c.entradas.len() => format!(
+                    ". `{}` es una sola entrada de {}: pásale un bus entero, como `X` o `X[0..{}]`",
+                    p.nombre.texto,
+                    en_bits(p.ancho.unwrap_or(1)),
+                    p.ancho.unwrap_or(1) - 1
+                ),
+                _ => String::new(),
+            };
             return Err(error(
                 format!(
-                    "`{}` lleva {} {plural}, pero tiene {}",
+                    "`{}` lleva {} {plural}, pero tiene {}{pista}",
                     circuito.texto,
                     c.entradas.len(),
                     args.len()
@@ -1313,15 +1390,20 @@ impl<'a> Elaborador<'a> {
                             ));
                         }
                         None => {
-                            return Err(error(
-                                format!("`{n}` no existe: declárala con `in` o asígnale un valor"),
-                                rango,
-                            ));
+                            // Los buses se sugieren por su nombre: `A`, no `A[0]`
+                            let nombres = self.ambitos[a]
+                                .senales
+                                .keys()
+                                .map(|x| x.split('[').next().unwrap_or(x));
+                            return Err(error(no_existe(&n, nombres), rango));
                         }
                     }
                 }
                 Ref::Miembro(a, m, bit, rango) => match self.ambitos[a].instancias.get(&m) {
                     Some(&hijo) => Ref::Senal(hijo, bit, rango),
+                    None if self.fallidas.contains(&(a, m.clone())) => {
+                        return Err(error(String::new(), rango));
+                    }
                     None => return Err(error(format!("`{m}` no es un circuito"), rango)),
                 },
             };
@@ -1426,20 +1508,49 @@ mod tests {
     }
 
     #[test]
+    fn sugerencias_por_nombre_parecido() {
+        assert_eq!(
+            errores("main { in Entrada; out X; X = not(Entrda); }"),
+            ["`Entrda` no existe; ¿quisiste decir `Entrada`?"]
+        );
+        assert_eq!(
+            errores(&format!(
+                "{MEDIO_SUMADOR} main {{ in A, B; out X; m = medioSumador(A, B); X = m.Sum; }}"
+            )),
+            ["`medioSumador` no es un circuito del proyecto; ¿quisiste decir `MedioSumador`?"]
+        );
+        assert_eq!(
+            errores(&format!(
+                "{MEDIO_SUMADOR} main {{ in A, B; out X; m = MedioSumador(A, B); X = m.Sum; }}"
+            )),
+            ["`MedioSumador` no tiene la salida `Sum`; ¿quisiste decir `Suma`?"]
+        );
+        // Nada parecido: el mensaje de siempre
+        assert_eq!(
+            errores("main { in A; out X; X = not(Zeta); }"),
+            ["`Zeta` no existe: declárala con `in` o asígnale un valor"]
+        );
+    }
+
+    #[test]
     fn errores_de_instancias() {
         let con = |cuerpo: &str| errores(&format!("{MEDIO_SUMADOR} main {{ {cuerpo} }}"));
         assert_eq!(
             con("out X; m = MedioSumador(1); X = m.Suma;"),
-            [
-                "`MedioSumador` lleva 2 entradas, pero tiene 1",
-                "`m` no es un circuito"
-            ]
+            ["`MedioSumador` lleva 2 entradas, pero tiene 1"]
+        );
+        // Los usos de una instancia que falló no repiten el error
+        assert_eq!(
+            con("out X, Y; m = Nada(1, 0); X = m.Suma; Y = m.Acarreo;"),
+            ["`Nada` no es un circuito del proyecto"]
         );
         assert_eq!(
-            con("out X; m = Nada(1, 0); X = m.Suma;"),
+            errores(
+                "circuit D { in Q[2]; out S; S = and(Q[0], Q[1]); }
+                 main { in A, B; out X; d = D(A, B); X = d.S; }"
+            ),
             [
-                "`Nada` no es un circuito del proyecto",
-                "`m` no es un circuito"
+                "`D` lleva 1 entrada, pero tiene 2. `Q` es una sola entrada de 2 bits: pásale un bus entero, como `X` o `X[0..1]`"
             ]
         );
         assert_eq!(
@@ -1460,7 +1571,7 @@ mod tests {
             errores(
                 "circuit Bucle { in A; out X; b = Bucle(A); X = b.X; } main { out Y; b = Bucle(1); Y = b.X; }"
             ),
-            ["`Bucle` se usa dentro de sí mismo", "`b` no es un circuito"]
+            ["`Bucle` se usa dentro de sí mismo"]
         );
     }
 

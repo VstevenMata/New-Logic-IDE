@@ -242,7 +242,7 @@ Los componentes son reservados para que no se puedan tapar (`and = ...` es error
 3. **Un solo conductor por señal:** asignar dos veces la misma señal es error, excepto varios `tristate`: se juntan en un bus que vale lo que dé el habilitado (Z si ninguno, X si chocan).
 4. **Cantidades y anchos deben coincidir:** `not(A, B)` es error (espera 1 entrada), igual que `and(A)` (pide 2 o más).
 5. **Resolución de nombres:** circuito actual → moldes y circuitos del proyecto (cualquier archivo del proyecto). Los componentes son reservados, así que nunca chocan.
-6. Todo `out` debe estar asignado. (Pendiente: advertir las entradas sin usar.)
+6. Todo `out` debe estar asignado. Las entradas sin usar se advierten en Problemas.
 7. Una entrada de un arreglo de subcircuitos sin conectar es error.
 8. El `for` se desenrolla al compilar; su variable solo existe en índices.
 
@@ -268,7 +268,7 @@ Funcionan sin IA, con algoritmos exactos dentro del compilador y el simulador. N
 | **Errores con sugerencia** | *"`FlipFlp` no existe, ¿quisiste decir `FlipFlop`?"*, *"AND3 espera 3 entradas, recibió 2"* | Distancia de edición entre nombres; verificación de cantidades y anchos |
 | **Tabla de verdad** | Genera la tabla completa del circuito seleccionado | El simulador prueba todas las combinaciones de entradas |
 | **Verificación** | *"Con A=1, B=0 tu salida da 0 y debería dar 1"* | El estudiante llena la columna "esperado" en el panel de la tabla de verdad y el simulador marca las filas que fallan |
-| **Solución** | A partir de una tabla de verdad, genera el circuito mínimo ya escrito en Logic_F-4:13 | Quine-McCluskey / mapas de Karnaugh |
+| **Solución** | A partir de una tabla de verdad, genera el circuito mínimo ya escrito en Logic_F-4:13 | Implicantes primos (como Quine-McCluskey); primero los esenciales y después el que cubre más filas. Las celdas sin marcar dan igual |
 | **Equivalencia** | Dice si dos circuitos hacen lo mismo y, si no, muestra la combinación donde difieren | Comparación de tablas de verdad |
 
 ---

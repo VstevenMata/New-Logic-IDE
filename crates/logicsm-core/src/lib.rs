@@ -4,6 +4,7 @@ pub mod compuerta;
 pub mod lexer;
 pub mod netlist;
 pub mod parser;
+pub mod solucion;
 
 pub use compuerta::{Compuerta, Valor};
 pub use netlist::Netlist;

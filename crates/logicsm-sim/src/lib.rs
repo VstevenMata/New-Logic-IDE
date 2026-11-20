@@ -207,6 +207,93 @@ pub fn simular(red: &Netlist, estado: &mut Estado, entradas: &[bool]) -> bool {
     estado.pendientes.is_empty()
 }
 
+/// Tabla de verdad: cada fila parte de cero (todo en X), así que en circuitos con
+/// memoria muestra X y no lo guardado.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Tabla {
+    /// Nombre de cada entrada, en el orden de los `in`, `button` y `clock`
+    pub entradas: Vec<String>,
+    /// Nombre y nodo de cada salida
+    pub salidas: Vec<(String, usize)>,
+    /// Por cada fila, lo que vale cada salida
+    pub filas: Vec<Vec<Valor>>,
+}
+
+impl Tabla {
+    /// Simula todas las combinaciones. Son 2^n filas: quien llama limita las entradas.
+    pub fn de(red: &Netlist) -> Tabla {
+        let mut entradas = Vec::new();
+        let mut salidas = Vec::new();
+        for (i, n) in red.nodos.iter().enumerate() {
+            match &n.tipo {
+                Tipo::Entrada(nombre, _) => entradas.push(nombre.clone()),
+                Tipo::Salida(nombre) => salidas.push((nombre.clone(), i)),
+                _ => {}
+            }
+        }
+        let mut tabla = Tabla {
+            entradas,
+            salidas,
+            filas: Vec::new(),
+        };
+        tabla.filas = (0..1usize << tabla.entradas.len())
+            .map(|f| {
+                let mut estado = Estado::default();
+                simular(red, &mut estado, &tabla.fila(f));
+                tabla
+                    .salidas
+                    .iter()
+                    .map(|&(_, i)| estado.valores[i])
+                    .collect()
+            })
+            .collect();
+        tabla
+    }
+
+    /// Las entradas de la fila `f`: la primera es el bit más alto
+    pub fn fila(&self, f: usize) -> Vec<bool> {
+        let n = self.entradas.len();
+        (0..n).map(|i| (f >> (n - 1 - i)) & 1 == 1).collect()
+    }
+}
+
+/// La primera fila y salida (de `a`) donde los dos circuitos dan distinto, con lo que da
+/// cada uno, o `None` si hacen lo mismo. Las entradas y salidas se emparejan por nombre.
+pub fn diferencia(a: &Tabla, b: &Tabla) -> Result<Option<(usize, usize, Valor, Valor)>, String> {
+    let salidas = |t: &Tabla| t.salidas.iter().map(|s| s.0.clone()).collect::<Vec<_>>();
+    for (que, x, y) in [
+        ("entradas", a.entradas.clone(), b.entradas.clone()),
+        ("salidas", salidas(a), salidas(b)),
+    ] {
+        let (mut xs, mut ys) = (x.clone(), y.clone());
+        xs.sort();
+        ys.sort();
+        if xs != ys {
+            return Err(format!(
+                "no tienen las mismas {que} ({} y {})",
+                x.join(", "),
+                y.join(", ")
+            ));
+        }
+    }
+    for f in 0..a.filas.len() {
+        let bits = a.fila(f);
+        // La misma combinación en el orden de las entradas de `b`
+        let g = b.entradas.iter().fold(0, |g, e| {
+            let k = a.entradas.iter().position(|x| x == e).unwrap_or(0);
+            (g << 1) | usize::from(bits[k])
+        });
+        for (k, (nombre, _)) in a.salidas.iter().enumerate() {
+            let kb = b.salidas.iter().position(|s| &s.0 == nombre).unwrap_or(0);
+            let (x, y) = (a.filas[f][k], b.filas[g][kb]);
+            if x != y {
+                return Ok(Some((f, k, x, y)));
+            }
+        }
+    }
+    Ok(None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -341,6 +428,42 @@ mod tests {
         // Otra dirección sigue en 0 y la 1 conserva el dato
         assert_eq!(paso("000000")[3..], bits("00"));
         assert_eq!(paso("100000")[3..], bits("01"));
+    }
+
+    #[test]
+    fn equivalencia_por_nombre() {
+        let t = |codigo: &str| Tabla::de(&logicsm_core::compilar(codigo).unwrap());
+        let nand = t("main { in A, B; out X; X = nand(A, B); }");
+        // De Morgan, con las entradas declaradas en otro orden
+        let de_morgan = t("main { in B, A; out X; X = or(not(A), not(B)); }");
+        assert_eq!(diferencia(&nand, &de_morgan), Ok(None));
+        // and en vez de nand: difiere ya en la primera fila (A = 0, B = 0)
+        let and = t("main { in A, B; out X; X = and(A, B); }");
+        assert_eq!(diferencia(&nand, &and), Ok(Some((0, 0, Uno, Cero))));
+        // or(not(A), B) difiere de nand con A = 1, B = 0 (fila 2)
+        let otro = t("main { in A, B; out X; X = or(not(A), B); }");
+        assert_eq!(diferencia(&nand, &otro), Ok(Some((2, 0, Uno, Cero))));
+        assert!(diferencia(&nand, &t("main { in A, C; out X; X = and(A, C); }")).is_err());
+    }
+
+    #[test]
+    fn la_solucion_cumple_la_tabla() {
+        use logicsm_core::solucion::{escribir, minimizar};
+        let entradas: Vec<String> = ["A", "B", "C"].map(String::from).to_vec();
+        let salidas = vec!["X".to_string()];
+        // Las 256 funciones de 3 entradas
+        for funcion in 0..256usize {
+            let unos: Vec<usize> = (0..8).filter(|f| funcion >> f & 1 == 1).collect();
+            let codigo = escribir("F", &entradas, &salidas, &[minimizar(3, &unos, &[])]);
+            let tabla = Tabla::de(&logicsm_core::compilar(&codigo).unwrap());
+            for f in 0..8 {
+                assert_eq!(
+                    tabla.filas[f],
+                    [Valor::de(unos.contains(&f))],
+                    "función {funcion:08b}, fila {f}: {codigo}"
+                );
+            }
+        }
     }
 
     #[test]

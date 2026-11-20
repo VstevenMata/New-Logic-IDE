@@ -10,9 +10,10 @@ use eframe::egui::{
     Stroke, StrokeKind, Theme, Vec2, pos2, vec2,
 };
 use logicsm_core::netlist::{Clase, Netlist, Nodo, Split, Tipo, Visor};
+use logicsm_core::solucion::{Producto, escribir, minimizar};
 use logicsm_core::{Compuerta, Valor};
-use logicsm_sim::Estado;
-use std::collections::VecDeque;
+use logicsm_sim::{Estado, Tabla};
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Duration;
@@ -198,6 +199,12 @@ pub struct Interfaz {
     /// Último circuito que compiló; se queda mientras el código tiene errores.
     red: Option<Netlist>,
     problemas: Vec<Problema>,
+    /// Advertencias del circuito que compiló (entradas sin usar)
+    avisos: Vec<String>,
+    /// Columna "esperado" de la tabla de verdad de cada archivo: [fila][salida], `None` = da igual
+    esperado: HashMap<String, Vec<Vec<Option<bool>>>>,
+    /// Archivo con el que se compara el abierto en la tabla de verdad
+    comparar: Option<String>,
     /// Valor de cada `in`, en orden
     entradas: Vec<bool>,
     /// Valor de cada nodo de `red`, memoria de los flip-flops y de las RAM
@@ -346,6 +353,9 @@ impl Interfaz {
             recientes: recientes.unwrap_or_default(),
             red: None,
             problemas: Vec::new(),
+            avisos: Vec::new(),
+            esperado: HashMap::new(),
+            comparar: None,
             entradas: Vec::new(),
             estado: Estado::default(),
             estable: true,
@@ -394,6 +404,7 @@ impl Interfaz {
         if self.sin_proyecto {
             self.red = None;
             self.problemas.clear();
+            self.avisos.clear();
             return;
         }
         match self.proyecto.compilar() {
@@ -407,9 +418,13 @@ impl Interfaz {
                 self.entradas.resize(n, false);
                 self.estado = Estado::default();
                 self.ondas.clear();
+                self.avisos = entradas_sin_usar(&red);
                 self.red = Some(red);
             }
-            Err(problemas) => self.problemas = problemas,
+            Err(problemas) => {
+                self.problemas = problemas;
+                self.avisos.clear();
+            }
         }
     }
 
@@ -2180,6 +2195,7 @@ impl Interfaz {
             Stroke::new(1.0, c.linea),
         );
         let mut problemas = self.problemas.clone();
+        problemas.extend(self.avisos.iter().cloned().map(Problema::sin_lugar));
         if !self.estable {
             problemas.push(Problema::sin_lugar(
                 "El circuito oscila: nunca llega a un valor estable.".into(),
@@ -2260,47 +2276,267 @@ impl Interfaz {
         }
     }
 
-    /// Todas las combinaciones de entradas y lo que vale cada salida
-    // ponytail: cada fila parte de X, así que en circuitos con memoria muestra X y no el estado guardado
-    fn tabla_de_verdad(&self, ui: &mut egui::Ui) {
+    /// Todas las combinaciones de entradas y lo que vale cada salida, con la columna
+    /// "esperado" de cada salida: verifica el circuito, crea uno desde lo esperado y lo
+    /// compara con otro archivo
+    fn tabla_de_verdad(&mut self, ui: &mut egui::Ui) {
         let c = paleta(ui);
         let Some(red) = &self.red else {
             vacio(ui, "Escribe un circuito para ver su tabla de verdad.");
             return;
         };
-        let (entradas, salidas) = columnas_de_tabla(red);
-        let n = entradas.len();
-        if n > 8 {
+        if contar_entradas(red) > MAX_ENTRADAS_TABLA {
             vacio(ui, "Con más de 8 entradas la tabla sería demasiado larga.");
             return;
         }
+        // ponytail: se simula en cada cuadro; guardar la tabla si se nota lento
+        let tabla = Tabla::de(red);
+        let circuito = red.nombre.clone();
+        let archivo = self.proyecto.actual().nombre.clone();
+        let (filas, salidas) = (tabla.filas.len(), tabla.salidas.len());
+        let esperado = self.esperado.entry(archivo.clone()).or_default();
+        if esperado.len() != filas || esperado.first().is_some_and(|f| f.len() != salidas) {
+            *esperado = vec![vec![None; salidas]; filas];
+        }
+
+        // Verificación: la primera celda marcada que no coincide
+        let marcadas = esperado.iter().flatten().filter(|e| e.is_some()).count();
+        let falla = (0..filas).find_map(|f| {
+            (0..salidas).find_map(|k| {
+                esperado[f][k]
+                    .filter(|&e| tabla.filas[f][k] != Valor::de(e))
+                    .map(|e| (f, k, e))
+            })
+        });
+        let mensaje = match falla {
+            Some((f, k, e)) => RichText::new(format!(
+                "Con {} tu salida {} da {} y debería dar {}.",
+                combinacion(&tabla, f),
+                tabla.salidas[k].0,
+                tabla.filas[f][k].simbolo(),
+                e as u8
+            ))
+            .color(c.error),
+            None if marcadas > 0 => {
+                RichText::new(format!("Las {marcadas} celdas marcadas coinciden.")).color(c.uno)
+            }
+            None => RichText::new(
+                "Llena la columna \"esperado\" (click en -) para verificar tu circuito o crear uno desde la tabla.",
+            )
+            .color(c.tenue),
+        };
+        ui.label(mensaje.size(12.0));
+
+        let mut crear = false;
+        ui.horizontal(|ui| {
+            crear = ui
+                .add_enabled(
+                    marcadas > 0,
+                    egui::Button::new("Crear circuito desde lo esperado"),
+                )
+                .on_hover_text(
+                    "Escribe el circuito más simple que da lo esperado; las celdas en - dan igual",
+                )
+                .clicked();
+            if ui
+                .add_enabled(marcadas > 0, egui::Button::new("Borrar lo esperado"))
+                .clicked()
+            {
+                esperado.iter_mut().for_each(|f| f.fill(None));
+            }
+            ui.separator();
+            ui.label("Comparar con");
+            egui::ComboBox::from_id_salt("comparar")
+                .selected_text(self.comparar.as_deref().unwrap_or("-"))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.comparar, None, "-");
+                    for a in &self.proyecto.archivos {
+                        if a.nombre != archivo {
+                            ui.selectable_value(
+                                &mut self.comparar,
+                                Some(a.nombre.clone()),
+                                &a.nombre,
+                            );
+                        }
+                    }
+                });
+        });
+        if let Some(otro) = &self.comparar {
+            let (texto, color) = match comparar(&self.proyecto, &tabla, otro) {
+                Ok(texto) => (texto, c.uno),
+                Err(texto) => (texto, c.error),
+            };
+            ui.label(RichText::new(texto).size(12.0).color(color));
+        }
+        ui.add_space(6.0);
+
         let bit = |v: Valor| RichText::new(v.simbolo()).monospace();
         egui::Grid::new("tabla_de_verdad")
             .striped(true)
             .spacing(vec2(18.0, 3.0))
             .show(ui, |ui| {
-                for nombre in &entradas {
-                    ui.label(RichText::new(*nombre).monospace().strong());
+                for nombre in &tabla.entradas {
+                    ui.label(RichText::new(nombre).monospace().strong());
                 }
-                for (_, nombre) in &salidas {
-                    ui.label(RichText::new(*nombre).monospace().strong().color(c.lavanda));
+                for (nombre, _) in &tabla.salidas {
+                    ui.label(RichText::new(nombre).monospace().strong().color(c.lavanda));
+                }
+                for (nombre, _) in &tabla.salidas {
+                    ui.label(
+                        RichText::new(format!("{nombre} esperado"))
+                            .monospace()
+                            .color(c.tenue),
+                    );
                 }
                 ui.end_row();
-                for fila in 0..1usize << n {
-                    let e = fila_de_entradas(fila, n);
-                    let mut estado = Estado::default();
-                    logicsm_sim::simular(red, &mut estado, &e);
-                    for &v in &e {
-                        ui.label(bit(Valor::de(v)));
+                for (f, celdas) in esperado.iter_mut().enumerate() {
+                    for b in tabla.fila(f) {
+                        ui.label(bit(Valor::de(b)));
                     }
-                    for &(i, _) in &salidas {
-                        let v = estado.valores[i];
+                    for &v in &tabla.filas[f] {
                         ui.label(bit(v).color(c.de(v)));
+                    }
+                    for (e, &v) in celdas.iter_mut().zip(&tabla.filas[f]) {
+                        let mal = e.is_some_and(|b| Valor::de(b) != v);
+                        let (texto, color) = match *e {
+                            None => ("-", c.tenue),
+                            Some(b) => (
+                                if b { "1" } else { "0" },
+                                if mal { c.error } else { c.tinta },
+                            ),
+                        };
+                        let boton =
+                            egui::Button::new(RichText::new(texto).monospace().color(color))
+                                .frame(false);
+                        if ui.add(boton).on_hover_text("Click: -, 0, 1").clicked() {
+                            *e = match *e {
+                                None => Some(false),
+                                Some(false) => Some(true),
+                                Some(true) => None,
+                            };
+                        }
                     }
                     ui.end_row();
                 }
             });
+
+        if crear {
+            let n = tabla.entradas.len();
+            let productos: Vec<Vec<Producto>> = (0..salidas)
+                .map(|k| {
+                    let filas_con = |v: Option<bool>| {
+                        (0..filas)
+                            .filter(|&f| esperado[f][k] == v)
+                            .collect::<Vec<_>>()
+                    };
+                    minimizar(n, &filas_con(Some(true)), &filas_con(None))
+                })
+                .collect();
+            let nombres: Vec<String> = tabla.salidas.iter().map(|s| s.0.clone()).collect();
+            self.crear_solucion(&circuito, &tabla.entradas, &nombres, &productos);
+        }
     }
+
+    /// Un archivo nuevo con el circuito que da lo esperado
+    fn crear_solucion(
+        &mut self,
+        circuito: &str,
+        entradas: &[String],
+        salidas: &[String],
+        productos: &[Vec<Producto>],
+    ) {
+        let base = if circuito == "main" {
+            "Solucion".to_string()
+        } else {
+            format!("{circuito}Solucion")
+        };
+        let libre = (1..100)
+            .map(|k| {
+                if k == 1 {
+                    base.clone()
+                } else {
+                    format!("{base}{k}")
+                }
+            })
+            .find(|nombre| self.proyecto.crear(nombre).is_ok());
+        let Some(nombre) = libre else {
+            self.aviso(format!("No se pudo crear el archivo {base}."));
+            return;
+        };
+        self.proyecto.actual_mut().codigo = escribir(&nombre, entradas, salidas, productos);
+        self.recompilar_desde_cero();
+        self.salida
+            .push(format!("Se creó {nombre} desde la tabla de verdad."));
+    }
+}
+
+/// Más entradas que esto hacen la tabla de verdad demasiado larga para mostrarla
+const MAX_ENTRADAS_TABLA: usize = 8;
+
+fn contar_entradas(red: &Netlist) -> usize {
+    red.nodos
+        .iter()
+        .filter(|n| matches!(n.tipo, Tipo::Entrada(..)))
+        .count()
+}
+
+/// "A=1, B=0": las entradas de la fila `f`
+fn combinacion(tabla: &Tabla, f: usize) -> String {
+    tabla
+        .entradas
+        .iter()
+        .zip(tabla.fila(f))
+        .map(|(e, v)| format!("{e}={}", v as u8))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Compara la tabla del archivo abierto con la del archivo `otro`: `Ok` si hacen lo mismo
+fn comparar(proyecto: &Proyecto, tabla: &Tabla, otro: &str) -> Result<String, String> {
+    let i = proyecto
+        .archivos
+        .iter()
+        .position(|a| a.nombre == otro)
+        .ok_or_else(|| format!("{otro} ya no existe."))?;
+    let red = proyecto
+        .compilar_archivo(i)
+        .map_err(|_| format!("{otro} tiene errores: corrígelos para comparar."))?;
+    if contar_entradas(&red) > MAX_ENTRADAS_TABLA {
+        return Err(format!(
+            "{otro} tiene más de {MAX_ENTRADAS_TABLA} entradas."
+        ));
+    }
+    match logicsm_sim::diferencia(tabla, &Tabla::de(&red)) {
+        Ok(None) => Ok(format!("Hace lo mismo que {otro}.")),
+        Ok(Some((f, k, aqui, alla))) => Err(format!(
+            "No hace lo mismo que {otro}: con {}, {} da {} aquí y {} en {otro}.",
+            combinacion(tabla, f),
+            tabla.salidas[k].0,
+            aqui.simbolo(),
+            alla.simbolo()
+        )),
+        Err(e) => Err(format!("No se puede comparar con {otro}: {e}.")),
+    }
+}
+
+/// "Advertencia: la entrada `A` no se usa." por cada entrada que nada lee
+fn entradas_sin_usar(red: &Netlist) -> Vec<String> {
+    let mut leida = vec![false; red.nodos.len()];
+    for n in &red.nodos {
+        for &e in &n.entradas {
+            leida[e] = true;
+        }
+    }
+    red.nodos
+        .iter()
+        .zip(leida)
+        .filter_map(|(n, leida)| match &n.tipo {
+            Tipo::Entrada(x, _) if !leida => {
+                Some(format!("Advertencia: la entrada `{x}` no se usa."))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// Guarda como PNG la parte `rect` del próximo cuadro (el lienzo) y manda el resultado
@@ -2516,53 +2752,32 @@ fn svg(figuras: &[Shape], fondo: Color32) -> String {
 
 /// Tabla de verdad en CSV: nombres de entradas y salidas, y una fila de 0 y 1 por combinación
 fn tabla_csv(red: &Netlist) -> Result<String, String> {
-    let (entradas, salidas) = columnas_de_tabla(red);
-    let n = entradas.len();
-    if n > MAX_ENTRADAS_CSV {
+    if contar_entradas(red) > MAX_ENTRADAS_CSV {
         return Err(format!(
             "tiene más de {MAX_ENTRADAS_CSV} entradas, la tabla sería demasiado grande"
         ));
     }
-    let mut csv = entradas
+    let tabla = Tabla::de(red);
+    let mut csv = tabla
+        .entradas
         .iter()
-        .copied()
-        .chain(salidas.iter().map(|&(_, nombre)| nombre))
+        .chain(tabla.salidas.iter().map(|(nombre, _)| nombre))
+        .map(String::as_str)
         .collect::<Vec<_>>()
         .join(",");
     csv.push('\n');
-    for fila in 0..1usize << n {
-        let e = fila_de_entradas(fila, n);
-        let mut estado = Estado::default();
-        logicsm_sim::simular(red, &mut estado, &e);
-        let bits: Vec<&str> = e
-            .iter()
-            .map(|&v| Valor::de(v))
-            .chain(salidas.iter().map(|&(i, _)| estado.valores[i]))
+    for (f, salidas) in tabla.filas.iter().enumerate() {
+        let bits: Vec<&str> = tabla
+            .fila(f)
+            .into_iter()
+            .map(Valor::de)
+            .chain(salidas.iter().copied())
             .map(Valor::simbolo)
             .collect();
         csv.push_str(&bits.join(","));
         csv.push('\n');
     }
     Ok(csv)
-}
-
-/// Columnas de la tabla de verdad: nombres de las entradas y (nodo, nombre) de las salidas
-fn columnas_de_tabla(red: &Netlist) -> (Vec<&str>, Vec<(usize, &str)>) {
-    let mut entradas = Vec::new();
-    let mut salidas = Vec::new();
-    for (i, n) in red.nodos.iter().enumerate() {
-        match &n.tipo {
-            Tipo::Entrada(nombre, _) => entradas.push(nombre.as_str()),
-            Tipo::Salida(nombre) => salidas.push((i, nombre.as_str())),
-            _ => {}
-        }
-    }
-    (entradas, salidas)
-}
-
-/// Valores de las `n` entradas en la fila `fila` (la primera entrada es el bit más alto)
-fn fila_de_entradas(fila: usize, n: usize) -> Vec<bool> {
-    (0..n).map(|i| (fila >> (n - 1 - i)) & 1 == 1).collect()
 }
 
 // ---------- Dibujo del circuito ----------
