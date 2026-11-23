@@ -19,132 +19,15 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Duration;
 
-/// Colores de un tema. Hay dos: CLARO (pastel de index.html) y OSCURO.
-struct Paleta {
-    fondo: Color32,
-    panel: Color32,
-    tinta: Color32,
-    tenue: Color32,
-    linea: Color32,
-    suave: Color32,
-    lavanda: Color32,
-    lavanda_fondo: Color32,
-    salvia_fondo: Color32,
-    salvia_borde: Color32,
-    salvia_texto: Color32,
-    codigo: Color32,
-    /// Puntos de la cuadrícula del lienzo (premultiplicado)
-    puntos: Color32,
-    /// Cables y LEDs en 1 (en 0 usan `tenue`)
-    uno: Color32,
-    /// Colores del código: estructura (`circuit`, `in`…), componentes (`and`, `split`…),
-    /// números y textos, comentarios y lo que el lexer no entiende
-    clave: Color32,
-    componente: Color32,
-    numero: Color32,
-    comentario: Color32,
-    error: Color32,
-}
-
-const CLARO: Paleta = Paleta {
-    fondo: Color32::from_rgb(0xf8, 0xf8, 0xf5),
-    panel: Color32::WHITE,
-    tinta: Color32::from_rgb(0x29, 0x2b, 0x2a),
-    tenue: Color32::from_rgb(0x7f, 0x82, 0x7e),
-    linea: Color32::from_rgb(0xe5, 0xe6, 0xe1),
-    suave: Color32::from_rgb(0xf2, 0xf3, 0xef),
-    lavanda: Color32::from_rgb(0xa9, 0x94, 0xd2),
-    lavanda_fondo: Color32::from_rgb(0xf0, 0xeb, 0xf8),
-    salvia_fondo: Color32::from_rgb(0xe6, 0xee, 0xe7),
-    salvia_borde: Color32::from_rgb(0xd7, 0xe4, 0xd9),
-    salvia_texto: Color32::from_rgb(0x42, 0x63, 0x4a),
-    codigo: Color32::from_rgb(0xfb, 0xfb, 0xf9),
-    // rgba(67, 76, 69, 0.075)
-    puntos: Color32::from_rgba_premultiplied(5, 6, 5, 19),
-    uno: Color32::from_rgb(0x4f, 0xa5, 0x60),
-    // Colores de lirios: lila, rosa, lirio tigre (naranja) y tallo (verde)
-    clave: Color32::from_rgb(0x86, 0x58, 0xc0),
-    componente: Color32::from_rgb(0xc2, 0x4f, 0x80),
-    numero: Color32::from_rgb(0xc8, 0x6e, 0x1e),
-    comentario: Color32::from_rgb(0x7d, 0x98, 0x74),
-    error: Color32::from_rgb(0xc4, 0x3d, 0x33),
-};
-
-// Gris verdoso (no negro puro) para que el pastel siga combinando
-const OSCURO: Paleta = Paleta {
-    fondo: Color32::from_rgb(0x1d, 0x20, 0x1e),
-    panel: Color32::from_rgb(0x25, 0x28, 0x26),
-    tinta: Color32::from_rgb(0xe3, 0xe5, 0xe0),
-    tenue: Color32::from_rgb(0x92, 0x97, 0x90),
-    linea: Color32::from_rgb(0x36, 0x3a, 0x37),
-    suave: Color32::from_rgb(0x2e, 0x32, 0x2f),
-    lavanda: Color32::from_rgb(0xb9, 0xa6, 0xe2),
-    lavanda_fondo: Color32::from_rgb(0x3a, 0x34, 0x4d),
-    salvia_fondo: Color32::from_rgb(0x2b, 0x3b, 0x2f),
-    salvia_borde: Color32::from_rgb(0x3d, 0x55, 0x43),
-    salvia_texto: Color32::from_rgb(0xa9, 0xd2, 0xb2),
-    codigo: Color32::from_rgb(0x21, 0x24, 0x22),
-    // rgba(255, 255, 255, 0.06)
-    puntos: Color32::from_rgba_premultiplied(15, 15, 15, 15),
-    uno: Color32::from_rgb(0x7c, 0xc9, 0x8b),
-    clave: Color32::from_rgb(0xc9, 0xa8, 0xf0),
-    componente: Color32::from_rgb(0xf0, 0xa0, 0xc4),
-    numero: Color32::from_rgb(0xf2, 0xb4, 0x7a),
-    comentario: Color32::from_rgb(0x84, 0x9c, 0x7e),
-    error: Color32::from_rgb(0xf0, 0x7c, 0x70),
-};
-
-impl Paleta {
-    /// Color de un valor: verde en 1, gris en 0, rojo en X y lavanda en Z
-    fn de(&self, v: Valor) -> Color32 {
-        match v {
-            Valor::Uno => self.uno,
-            Valor::Cero => self.tenue,
-            Valor::X => self.error,
-            Valor::Z => self.lavanda,
-        }
-    }
-}
-
-/// La paleta del tema activo
-fn paleta(ui: &egui::Ui) -> &'static Paleta {
-    match ui.ctx().theme() {
-        Theme::Light => &CLARO,
-        Theme::Dark => &OSCURO,
-    }
-}
-
-/// Colores y bordes de los widgets de egui para los dos temas.
-/// La primera vez arranca en claro; después, con el último que se eligió.
-pub fn estilo(ctx: &egui::Context) {
-    for (tema, c) in [(Theme::Light, &CLARO), (Theme::Dark, &OSCURO)] {
-        ctx.style_mut_of(tema, |s| {
-            let v = &mut s.visuals;
-            v.panel_fill = c.panel;
-            v.window_fill = c.panel;
-            v.window_stroke = Stroke::new(1.0, c.linea);
-            v.extreme_bg_color = c.codigo;
-            v.override_text_color = Some(c.tinta);
-            v.selection.bg_fill = c.lavanda_fondo;
-            v.selection.stroke = Stroke::new(1.0, c.lavanda);
-            v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, c.linea);
-            for w in [
-                &mut v.widgets.inactive,
-                &mut v.widgets.hovered,
-                &mut v.widgets.active,
-            ] {
-                w.corner_radius = CornerRadius::same(5);
-                w.bg_stroke = Stroke::new(1.0, c.linea);
-                w.expansion = 0.0;
-            }
-            v.widgets.hovered.bg_stroke = Stroke::new(1.0, c.lavanda);
-            v.widgets.inactive.weak_bg_fill = c.panel;
-            v.widgets.hovered.weak_bg_fill = c.suave;
-            v.widgets.active.weak_bg_fill = c.suave;
-            s.spacing.button_padding = vec2(9.0, 5.0);
-        });
-    }
-}
+mod dibujo;
+mod exportar;
+mod tabla;
+mod tema;
+use dibujo::*;
+use exportar::*;
+use tabla::*;
+pub use tema::estilo;
+use tema::*;
 
 /// Lo que se hace después de confirmar que se pueden perder los cambios sin guardar
 #[derive(Clone)]
@@ -167,6 +50,34 @@ enum Ventana {
     Atajos,
     Actualizar,
     Acerca,
+}
+
+/// En pantallas angostas (celular) se ve una parte a la vez, elegida abajo
+#[derive(Clone, Copy, PartialEq)]
+enum Vista {
+    Proyecto,
+    Codigo,
+    Circuito,
+    Senales,
+    Abajo,
+}
+
+impl Vista {
+    const TODAS: [(Vista, &str); 5] = [
+        (Vista::Proyecto, "Proyecto"),
+        (Vista::Codigo, "Código"),
+        (Vista::Circuito, "Circuito"),
+        (Vista::Senales, "Entradas"),
+        (Vista::Abajo, "Salida"),
+    ];
+}
+
+/// Más angosto que esto (en puntos) se usa la pantalla de celular
+const ANCHO_MOVIL: f32 = 1024.0;
+
+/// Ancho de una ventana emergente: `ancho`, o menos si la pantalla no alcanza
+fn ancho_modal(ui: &egui::Ui, ancho: f32) -> f32 {
+    ancho.min(ui.ctx().content_rect().width() - 48.0)
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -232,6 +143,11 @@ pub struct Interfaz {
     ver_proyecto: bool,
     ver_senales: bool,
     ver_inferior: bool,
+    /// Pantalla angosta: una parte a la vez (`parte`) en lugar de paneles
+    movil: bool,
+    parte: Vista,
+    /// Cuánto está desplazado el código (para moverlo con el dedo en el celular)
+    desplazado: f32,
     ventana: Option<Ventana>,
     /// Acción esperando confirmación porque hay cambios sin guardar
     confirmar: Option<Accion>,
@@ -379,6 +295,9 @@ impl Interfaz {
             ver_proyecto: true,
             ver_senales: true,
             ver_inferior: true,
+            movil: false,
+            parte: Vista::Codigo,
+            desplazado: 0.0,
             ventana: None,
             confirmar: None,
             borrar: None,
@@ -859,7 +778,7 @@ impl Interfaz {
             let nombre = self.proyecto.archivos[i].nombre.clone();
             let mut eliminar = None;
             let r = egui::Modal::new(egui::Id::unique("borrar")).show(ctx, |ui| {
-                ui.set_width(340.0);
+                ui.set_width(ancho_modal(ui, 340.0));
                 ui.label(
                     RichText::new(format!("¿Eliminar {nombre}?"))
                         .size(14.0)
@@ -902,7 +821,7 @@ impl Interfaz {
         }
         let mut respuesta = None;
         let r = egui::Modal::new(egui::Id::unique("confirmar")).show(ctx, |ui| {
-            ui.set_width(340.0);
+            ui.set_width(ancho_modal(ui, 340.0));
             ui.label(RichText::new("Hay cambios sin guardar").size(14.0).strong());
             ui.add_space(4.0);
             ui.label("¿Quieres guardarlos antes de continuar?");
@@ -950,7 +869,7 @@ impl Interfaz {
         // (con ×, Esc o un click afuera)
         let mut cerrar = false;
         let r = egui::Modal::new(egui::Id::unique("ventana_ayuda")).show(ctx, |ui| {
-            ui.set_width(560.0);
+            ui.set_width(ancho_modal(ui, 560.0));
             ui.horizontal(|ui| {
                 ui.label(RichText::new(titulo).size(15.0).strong());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -961,8 +880,9 @@ impl Interfaz {
                 });
             });
             ui.separator();
+            let alto = ui.ctx().content_rect().height() - 140.0;
             egui::ScrollArea::vertical()
-                .max_height(480.0)
+                .max_height(alto.clamp(160.0, 480.0))
                 .show(ui, |ui| match ventana {
                     Ventana::Guia => ayuda::guia(ui),
                     Ventana::Atajos => ayuda::atajos(ui),
@@ -1027,13 +947,19 @@ impl eframe::App for Interfaz {
             }
         }
         let c = paleta(ui);
+        let movil = ui.available_width() < ANCHO_MOVIL;
+        if movil != self.movil {
+            // Con el dedo hacen falta botones más altos (en egui miden 20 por defecto)
+            ctx.all_styles_mut(|s| s.spacing.interact_size.y = if movil { 40.0 } else { 20.0 });
+        }
+        self.movil = movil;
         egui::Panel::top("barra")
             .exact_size(48.0)
             .resizable(false)
             .frame(
                 Frame::new()
                     .fill(c.panel)
-                    .inner_margin(Margin::symmetric(14, 0)),
+                    .inner_margin(Margin::symmetric(if self.movil { 8 } else { 14 }, 0)),
             )
             .show(ui, |ui| self.barra_superior(ui));
         if self.sin_proyecto {
@@ -1042,6 +968,13 @@ impl eframe::App for Interfaz {
                 .show(ui, |ui| self.bienvenida(ui));
             self.ventanas(&ctx);
             self.confirmacion(&ctx);
+            return;
+        }
+        if self.movil {
+            self.pantalla_movil(ui, c);
+            self.ventanas(&ctx);
+            self.confirmacion(&ctx);
+            self.ventana_exportar(&ctx);
             return;
         }
         // Arrastrar el borde por debajo del mínimo oculta el panel; arrastrarlo de nuevo lo abre.
@@ -1107,279 +1040,87 @@ impl eframe::App for Interfaz {
     }
 }
 
-/// Formatos de exportación que faltan
-// ponytail: deshabilitados hasta que exista cada exportador
-const FORMATOS: [&str; 2] = ["LogicCircuit (.CircuitProject)", "Verilog (.v)"];
-
-/// Mensaje para Salida, o el error para avisar
-type Exportado = Result<String, String>;
-
-/// Más entradas que esto hacen una tabla de verdad demasiado grande para exportar
-const MAX_ENTRADAS_CSV: usize = 16;
-
 impl Interfaz {
-    /// Menú Archivo → Exportar
-    fn exportar(&mut self, ui: &mut egui::Ui) {
-        let libre = self.cola_png.is_empty();
-        for formato in Formato::TODOS {
-            if ui
-                .add_enabled(libre, egui::Button::new(formato.menu()))
-                .on_disabled_hover_text("Exportando imágenes…")
-                .clicked()
-            {
-                if self.proyecto.archivos.len() == 1 {
-                    self.exportar_a(ui.ctx(), formato, vec![0]);
-                } else {
-                    // Marcado de entrada: el archivo abierto
-                    let marcados = (0..self.proyecto.archivos.len())
-                        .map(|i| i == self.proyecto.activo)
-                        .collect();
-                    self.elegir = Some((formato, marcados));
-                }
-            }
-        }
-        for formato in FORMATOS {
-            ui.add_enabled(false, egui::Button::new(formato))
-                .on_disabled_hover_text("Todavía no disponible");
-        }
-    }
-
-    /// Ventanas de Exportar: qué archivos, y si se reemplazan los que ya existen
-    fn ventana_exportar(&mut self, ctx: &egui::Context) {
-        if let Some((formato, marcados)) = &mut self.elegir {
-            let formato = *formato;
-            let mut listo = None;
-            let r = egui::Modal::new(egui::Id::unique("exportar")).show(ctx, |ui| {
-                ui.set_width(340.0);
-                ui.label(RichText::new(formato.titulo()).size(14.0).strong());
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    ui.label("¿Qué archivos?");
-                    if ui.small_button("Todos").clicked() {
-                        marcados.fill(true);
-                    }
-                    if ui.small_button("Ninguno").clicked() {
-                        marcados.fill(false);
-                    }
-                });
-                ui.add_space(4.0);
-                egui::ScrollArea::vertical()
-                    .max_height(260.0)
-                    .show(ui, |ui| {
-                        for (a, marcado) in self.proyecto.archivos.iter().zip(marcados.iter_mut()) {
-                            ui.checkbox(marcado, &a.nombre);
+    /// Celular: pestañas abajo y una sola parte en el resto de la pantalla
+    fn pantalla_movil(&mut self, ui: &mut egui::Ui, c: &Paleta) {
+        egui::Panel::bottom("vistas")
+            .exact_size(52.0)
+            .resizable(false)
+            .frame(Frame::new().fill(c.panel))
+            .show(ui, |ui| {
+                ui.columns(Vista::TODAS.len(), |columnas| {
+                    for (ui, (vista, texto)) in columnas.iter_mut().zip(Vista::TODAS) {
+                        let elegida = self.parte == vista;
+                        let color = if elegida { c.tinta } else { c.tenue };
+                        let texto = RichText::new(texto).size(12.5).color(color);
+                        let r = ui.add_sized(
+                            vec2(ui.available_width(), 50.0),
+                            // Muy angosto: "Proy…" en vez de partir la palabra en dos líneas
+                            egui::Button::new(if elegida { texto.strong() } else { texto })
+                                .frame(false)
+                                .truncate(),
+                        );
+                        if elegida {
+                            let linea = Rect::from_min_size(
+                                r.rect.left_top() + vec2(8.0, 0.0),
+                                vec2(r.rect.width() - 16.0, 2.5),
+                            );
+                            ui.painter().rect_filled(linea, 1.0, c.salvia_borde);
                         }
-                    });
-                ui.add_space(8.0);
-                let cuantos = marcados.iter().filter(|&&m| m).count();
-                ui.label(
-                    RichText::new(match cuantos {
-                        0 => "Marca al menos uno.".to_string(),
-                        1 => "Luego eliges el nombre y dónde guardarlo.".to_string(),
-                        n => format!("Luego eliges la carpeta para los {n}."),
-                    })
-                    .size(11.5)
-                    .color(paleta(ui).tenue),
-                );
-                ui.add_space(12.0);
-                ui.horizontal(|ui| {
-                    if ui
-                        .add_enabled(cuantos > 0, egui::Button::new("Exportar"))
-                        .clicked()
-                    {
-                        listo = Some(true);
-                    }
-                    if ui.button("Cancelar").clicked() {
-                        listo = Some(false);
+                        if r.clicked() {
+                            self.parte = vista;
+                        }
                     }
                 });
             });
-            if r.should_close() && listo.is_none() {
-                listo = Some(false);
-            }
-            if let Some(exportar) = listo
-                && let Some((formato, marcados)) = self.elegir.take()
-                && exportar
-            {
-                let indices = (0..marcados.len()).filter(|&i| marcados[i]).collect();
-                self.exportar_a(ctx, formato, indices);
-            }
-        }
-
-        let Some((formato, destinos)) = &self.reemplazar else {
-            return;
-        };
-        let existen: Vec<String> = destinos
-            .iter()
-            .filter(|(_, r)| r.exists())
-            .map(|(_, r)| r.file_name().unwrap_or_default().to_string_lossy().into())
-            .collect();
-        let formato = *formato;
-        let mut reemplazar = None;
-        let r = egui::Modal::new(egui::Id::unique("reemplazar")).show(ctx, |ui| {
-            ui.set_width(340.0);
-            ui.label(
-                RichText::new("Ya existen en esa carpeta")
-                    .size(14.0)
-                    .strong(),
-            );
-            ui.add_space(4.0);
-            ui.label(existen.join(", "));
-            ui.add_space(12.0);
-            ui.horizontal(|ui| {
-                if ui.button("Reemplazar").clicked() {
-                    reemplazar = Some(true);
-                }
-                if ui.button("Cancelar").clicked() {
-                    reemplazar = Some(false);
-                }
-            });
-        });
-        if r.should_close() && reemplazar.is_none() {
-            reemplazar = Some(false);
-        }
-        if let Some(si) = reemplazar
-            && let Some((_, destinos)) = self.reemplazar.take()
-            && si
-        {
-            self.escribir(formato, destinos);
-        }
-    }
-
-    /// Pide dónde guardar (un archivo, o una carpeta si son varios) y exporta
-    fn exportar_a(&mut self, ctx: &egui::Context, formato: Formato, indices: Vec<usize>) {
-        let ext = formato.ext();
-        let carpeta_proyecto = self
-            .proyecto
-            .ruta
-            .as_deref()
-            .and_then(|r| r.parent())
-            .map(PathBuf::from);
-        let destinos: Vec<(usize, PathBuf)> = if let [i] = indices[..] {
-            let nombre = format!("{}.{ext}", self.proyecto.archivos[i].nombre);
-            let extensiones = [ext];
-            let filtro = (formato.tipo(), &extensiones[..]);
-            let carpeta = carpeta_proyecto.as_deref();
-            let Some(ruta) = plataforma::guardar_como(formato.titulo(), filtro, &nombre, carpeta)
-            else {
-                return;
-            };
-            let tiene = ruta
-                .extension()
-                .is_some_and(|e| e.eq_ignore_ascii_case(ext));
-            vec![(
-                i,
-                if tiene {
-                    ruta
-                } else {
-                    ruta.with_extension(ext)
-                },
-            )]
+        // Exportar PNG captura el lienzo: tiene que estar a la vista
+        let vista = if self.cola_png.is_empty() {
+            self.parte
         } else {
-            let titulo = format!("{}: elige la carpeta", formato.titulo());
-            let Some(carpeta) = plataforma::elegir_carpeta(&titulo, carpeta_proyecto.as_deref())
-            else {
-                return;
-            };
-            indices
-                .into_iter()
-                .map(|i| {
-                    let nombre = format!("{}.{ext}", self.proyecto.archivos[i].nombre);
-                    (i, carpeta.join(nombre))
-                })
-                .collect()
+            Vista::Circuito
         };
-        // Nunca se escribe encima del proyecto (un archivo con su mismo nombre, en .SA);
-        // en el navegador todo se descarga
-        if !WEB
-            && let Some(propio) = &self.proyecto.ruta
-            && destinos.iter().any(|(_, r)| r == propio)
-        {
-            self.aviso(format!(
-                "Exportar ahí reemplazaría el proyecto {}: elige otra carpeta.",
-                propio.display()
-            ));
-            return;
-        }
-        // Con un solo archivo, el diálogo del sistema ya preguntó si se reemplaza
-        if destinos.len() > 1 && destinos.iter().any(|(_, r)| r.exists()) {
-            self.reemplazar = Some((formato, destinos));
-            return;
-        }
-        self.escribir(formato, destinos);
-        ctx.request_repaint();
+        let (fondo, margen) = match vista {
+            Vista::Codigo => (c.codigo, Margin::ZERO),
+            Vista::Circuito => (c.fondo, Margin::ZERO),
+            Vista::Abajo => (c.panel, Margin::ZERO),
+            Vista::Proyecto | Vista::Senales => (c.panel, Margin::symmetric(14, 15)),
+        };
+        let zona = egui::CentralPanel::default()
+            .frame(Frame::new().fill(fondo).inner_margin(margen))
+            .show(ui, |ui| match vista {
+                Vista::Proyecto => self.panel_proyecto(ui),
+                Vista::Codigo => self.editor(ui),
+                Vista::Circuito => self.lienzo(ui),
+                Vista::Senales => self.senales(ui),
+                Vista::Abajo => self.pestanas(ui),
+            })
+            .response
+            .rect;
+        let ctx = ui.ctx().clone();
+        self.soltar_componente(&ctx, zona);
     }
 
-    fn escribir(&mut self, formato: Formato, destinos: Vec<(usize, PathBuf)>) {
-        if let Formato::Png | Formato::Svg = formato {
-            self.volver_a = self.proyecto.activo;
-            self.cola_png = destinos.into();
-            self.preparar_imagen();
-            return;
-        }
-        for (i, ruta) in destinos {
-            let contenido = match formato {
-                Formato::Csv => self
-                    .proyecto
-                    .compilar_archivo(i)
-                    .map_err(|_| "tiene errores".to_string())
-                    .and_then(|red| tabla_csv(&red)),
-                _ => Ok(self.proyecto.archivos[i].codigo.clone()),
-            };
-            let resultado = contenido
-                .map_err(|e| format!("{}: {e}, no se exportó.", self.proyecto.archivos[i].nombre))
-                .and_then(|texto| {
-                    plataforma::escribir(&ruta, texto.as_bytes())
-                        .map(|()| format!("Exportado: {}", ruta.display()))
-                        .map_err(|e| format!("No se pudo exportar {}: {e}", ruta.display()))
-                });
-            self.informar(resultado);
-        }
-    }
-
-    /// Abre el siguiente archivo de la cola de imágenes y lo encuadra; el lienzo lo
-    /// captura cuando ya está dibujado así. Al terminar vuelve al archivo de antes.
-    fn preparar_imagen(&mut self) {
-        while let Some(&(i, _)) = self.cola_png.front() {
-            if i != self.proyecto.activo {
-                self.abrir_archivo(i);
-            }
-            if self.red.is_some() {
-                self.ajustar = true;
-                self.pedida = false;
-                return;
-            }
-            let nombre = self.proyecto.archivos[i].nombre.clone();
-            self.aviso(format!("{nombre}: tiene errores, no se exportó."));
-            self.cola_png.pop_front();
-        }
-        if self.volver_a != self.proyecto.activo && self.volver_a < self.proyecto.archivos.len() {
-            self.abrir_archivo(self.volver_a);
-        }
-    }
-
-    fn informar(&mut self, resultado: Exportado) {
-        match resultado {
-            Ok(m) => self.salida.push(m),
-            Err(e) => self.aviso(e),
-        }
-    }
-
-    /// Logo, nombre y menú a la izquierda, controles de simulación y el tema a la derecha
     fn barra_superior(&mut self, ui: &mut egui::Ui) {
+        // En el celular: los menús dentro de uno solo y los botones sin texto
+        let movil = self.movil;
+        let rotulo = |texto: &'static str| if movil { "" } else { texto };
         ui.horizontal_centered(|ui| {
             ui.image((self.logo.id(), vec2(22.0, 22.0)));
-            ui.label(RichText::new("LogicSM").size(14.0).strong());
-            ui.add_space(6.0);
-            self.menu(ui);
-            ui.add_space(6.0);
+            if movil {
+                ui.menu_button("Menú", |ui| self.menu(ui));
+            } else {
+                ui.label(RichText::new("LogicSM").size(14.0).strong());
+                ui.add_space(6.0);
+                self.menu(ui);
+            }
+            ui.add_space(if movil { 2.0 } else { 6.0 });
             ui.separator();
-            ui.add_space(6.0);
+            ui.add_space(if movil { 2.0 } else { 6.0 });
             let hay = self.hay_reloj();
             let (texto, icono) = if self.corriendo {
-                ("Pausa", Icono::Pausa)
+                (rotulo("Pausa"), Icono::Pausa)
             } else {
-                ("Ejecutar", Icono::Ejecutar)
+                (rotulo("Ejecutar"), Icono::Ejecutar)
             };
             let (ejecutar, paso) = if hay {
                 (
@@ -1399,7 +1140,9 @@ impl Interfaz {
                 self.ejecutar(ui.ctx());
             }
             if ui
-                .add_enabled_ui(hay, |ui| boton(ui, "Paso a paso", Icono::Paso, false))
+                .add_enabled_ui(hay, |ui| {
+                    boton(ui, rotulo("Paso a paso"), Icono::Paso, false)
+                })
                 .inner
                 .on_hover_text(paso)
                 .on_disabled_hover_text(paso)
@@ -1408,7 +1151,7 @@ impl Interfaz {
                 self.paso();
             }
             egui::ComboBox::from_id_salt("frecuencia")
-                .width(70.0)
+                .width(if movil { 58.0 } else { 70.0 })
                 .selected_text(hz(self.frecuencia))
                 .show_ui(ui, |ui| {
                     for f in FRECUENCIAS {
@@ -1417,7 +1160,7 @@ impl Interfaz {
                 })
                 .response
                 .on_hover_text("Frecuencia del reloj");
-            if boton(ui, "Reiniciar", Icono::Reiniciar, false)
+            if boton(ui, rotulo("Reiniciar"), Icono::Reiniciar, false)
                 .on_hover_text("Pone las entradas en 0 y borra la memoria")
                 .clicked()
             {
@@ -1431,8 +1174,12 @@ impl Interfaz {
                 } else {
                     ("Oscuro", Icono::Luna, Theme::Dark)
                 };
-                if boton(ui, texto, icono, false).clicked() {
+                if boton(ui, rotulo(texto), icono, false).clicked() {
                     ui.ctx().set_theme(otro);
+                }
+                // En el celular no hay paneles: las partes se eligen abajo
+                if movil {
+                    return;
                 }
                 ui.add_space(6.0);
                 // De derecha a izquierda: quedan en el orden del dibujo (izquierdo, abajo, derecho)
@@ -1467,8 +1214,11 @@ impl Interfaz {
     /// Menú principal al estilo de VS Code
     fn menu(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
-        let opcion = |ui: &mut egui::Ui, texto: &str, atajo: &str| {
-            ui.add(egui::Button::new(texto).shortcut_text(atajo))
+        // En el celular no hay teclado: los atajos solo ocupan lugar
+        let movil = self.movil;
+        let atajo = move |a: &'static str| if movil { "" } else { a };
+        let opcion = |ui: &mut egui::Ui, texto: &str, a: &'static str| {
+            ui.add(egui::Button::new(texto).shortcut_text(atajo(a)))
                 .clicked()
         };
         let tecla = |key| egui::Event::Key {
@@ -1488,6 +1238,7 @@ impl Interfaz {
             }
             if !self.sin_proyecto && opcion(ui, "Nuevo archivo", "") {
                 self.ver_proyecto = true;
+                self.parte = Vista::Proyecto;
                 self.nombrando = Some((None, String::new()));
                 self.error_nombre = None;
             }
@@ -1561,14 +1312,17 @@ impl Interfaz {
             let hay = self.hay_reloj();
             let texto = if self.corriendo { "Pausa" } else { "Ejecutar" };
             if ui
-                .add_enabled(hay, egui::Button::new(texto).shortcut_text("F5"))
+                .add_enabled(hay, egui::Button::new(texto).shortcut_text(atajo("F5")))
                 .on_disabled_hover_text(SIN_RELOJ)
                 .clicked()
             {
                 self.ejecutar(&ctx);
             }
             if ui
-                .add_enabled(hay, egui::Button::new("Paso a paso").shortcut_text("F10"))
+                .add_enabled(
+                    hay,
+                    egui::Button::new("Paso a paso").shortcut_text(atajo("F10")),
+                )
                 .on_disabled_hover_text(SIN_RELOJ)
                 .clicked()
             {
@@ -1581,10 +1335,12 @@ impl Interfaz {
             if opcion(ui, "Tabla de verdad", "") {
                 self.pestana = Pestana::Tabla;
                 self.ver_inferior = true;
+                self.parte = Vista::Abajo;
             }
             if opcion(ui, "Ondas", "") {
                 self.pestana = Pestana::Ondas;
                 self.ver_inferior = true;
+                self.parte = Vista::Abajo;
             }
         });
         ui.menu_button("Ayuda", |ui| {
@@ -1647,11 +1403,12 @@ impl Interfaz {
             )
             .on_hover_text("El proyecto: un solo archivo .SA con todos estos adentro");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .small_button("+")
-                    .on_hover_text("Nuevo archivo")
-                    .clicked()
-                {
+                let mas = if self.movil {
+                    ui.button("+")
+                } else {
+                    ui.small_button("+")
+                };
+                if mas.on_hover_text("Nuevo archivo").clicked() {
                     self.nombrando = Some((None, String::new()));
                     self.error_nombre = None;
                 }
@@ -1715,10 +1472,11 @@ impl Interfaz {
         let ctx = ui.ctx().clone();
         let c = paleta(ui);
         let ancho = 260.0;
+        let movil = self.movil;
         let opcion = |ui: &mut egui::Ui, texto: &str, atajo: &str| {
             ui.add(
                 egui::Button::new(RichText::new(texto).size(13.0))
-                    .shortcut_text(atajo)
+                    .shortcut_text(if movil { "" } else { atajo })
                     .min_size(vec2(ancho, 34.0)),
             )
         };
@@ -1776,8 +1534,10 @@ impl Interfaz {
                         }
                     }
                 }
-                ui.add_space(26.0);
-                vacio(ui, "También puedes arrastrar un archivo .SA a la ventana.");
+                if !movil {
+                    ui.add_space(26.0);
+                    vacio(ui, "También puedes arrastrar un archivo .SA a la ventana.");
+                }
             });
         });
     }
@@ -1833,86 +1593,6 @@ impl Interfaz {
         let marca = if a.sin_guardar() { " •" } else { "" };
         format!("Código — {}{marca}", a.nombre)
     }
-}
-
-/// Triángulo ▾ a la derecha de un botón que abre un menú. Se dibuja en vez de escribirlo:
-/// en egui los símbolos dependen de las fuentes del sistema y en Linux salía un cuadro vacío.
-fn flecha_abajo(ui: &egui::Ui, boton: &egui::Response) {
-    let c = boton.rect.right_center() - vec2(12.0, 0.0);
-    let color = ui.visuals().widgets.style(boton).fg_stroke.color;
-    ui.painter().add(Shape::convex_polygon(
-        vec![
-            c + vec2(-4.0, -2.0),
-            c + vec2(4.0, -2.0),
-            c + vec2(0.0, 3.0),
-        ],
-        color,
-        egui::Stroke::NONE,
-    ));
-}
-
-/// Línea ondulada de `x0` a `x1` a la altura `y`, como la de los correctores
-fn zigzag(p: &egui::Painter, x0: f32, x1: f32, y: f32, color: Color32) {
-    let paso = 2.0;
-    let puntos = (0..=((x1 - x0) / paso).ceil() as usize)
-        .map(|i| {
-            let x = (x0 + i as f32 * paso).min(x1);
-            pos2(x, if i % 2 == 0 { y } else { y - 2.0 })
-        })
-        .collect();
-    p.add(Shape::line(puntos, Stroke::new(1.0, color)));
-}
-
-/// El código con un color por tipo de token, para el editor
-fn colorear(codigo: &str, fuente: &FontId, c: &Paleta) -> egui::text::LayoutJob {
-    use logicsm_core::lexer::{Reservada as R, Tipo as T, resaltar};
-    let (tokens, errores) = resaltar(codigo);
-    let mut tramos: Vec<(std::ops::Range<usize>, Color32)> = tokens
-        .iter()
-        .map(|t| {
-            let color = match &t.tipo {
-                T::Reservada(R::Circuit | R::Main | R::For | R::In | R::Out) => c.clave,
-                T::Reservada(_) => c.componente,
-                T::Entero(_) | T::Texto(_) => c.numero,
-                T::Comentario => c.comentario,
-                T::Ident(_) => c.tinta,
-                _ => c.tenue,
-            };
-            (t.rango.clone(), color)
-        })
-        .chain(errores.iter().map(|e| (e.rango.clone(), c.error)))
-        .collect();
-    // Estable: un comentario sin cerrar es token y error a la vez, y gana el token
-    tramos.sort_by_key(|(r, _)| r.start);
-
-    let mut trabajo = egui::text::LayoutJob::default();
-    let mut agregar = |desde: usize, hasta: usize, color| {
-        let formato = egui::TextFormat::simple(fuente.clone(), color);
-        trabajo.append(&codigo[desde..hasta], 0.0, formato);
-    };
-    let mut fin = 0;
-    for (r, color) in tramos {
-        if r.start < fin {
-            continue;
-        }
-        // Espacios y saltos de línea entre tokens
-        agregar(fin, r.start, c.tinta);
-        agregar(r.start, r.end, color);
-        fin = r.end;
-    }
-    agregar(fin, codigo.len(), c.tinta);
-    trabajo
-}
-
-/// Título de sección ("Proyecto", "Entradas"…)
-fn titulo(ui: &mut egui::Ui, texto: &str) {
-    ui.label(RichText::new(texto).size(12.0).strong());
-    ui.add_space(8.0);
-}
-
-/// Texto tenue para secciones vacías
-fn vacio(ui: &mut egui::Ui, texto: &str) {
-    ui.label(RichText::new(texto).size(11.5).color(paleta(ui).tenue));
 }
 
 impl Interfaz {
@@ -1984,6 +1664,13 @@ impl Interfaz {
             let alto = ui.text_style_height(&egui::TextStyle::Monospace);
             area = area.vertical_scroll_offset((linea as f32 - 4.0).max(0.0) * alto);
         }
+        // En el celular, arrastrar el dedo desplaza el código; si no, el editor selecciona texto
+        let arrastrando =
+            self.movil && ui.input(|i| i.any_touches() && i.pointer.is_decidedly_dragging());
+        if arrastrando {
+            let dy = ui.input(|i| i.pointer.delta().y);
+            area = area.vertical_scroll_offset((self.desplazado - dy).max(0.0));
+        }
         let c = paleta(ui);
         let fuente = egui::TextStyle::Monospace.resolve(ui.style());
         // ponytail: colorea todo el archivo en cada cuadro; guardar el resultado si un archivo largo se pone lento
@@ -1992,96 +1679,102 @@ impl Interfaz {
             trabajo.wrap.max_width = ancho;
             ui.painter().layout_job(trabajo)
         };
-        area.show(ui, |ui| {
-            ui.horizontal_top(|ui| {
-                // Columna de números de línea: se llena después, con las filas del texto
-                let lineas = self.proyecto.actual().codigo.matches('\n').count() + 1;
-                let digito = ui
-                    .painter()
-                    .layout_no_wrap("0".into(), fuente.clone(), c.tenue)
-                    .size()
-                    .x;
-                let ancho = lineas.to_string().len().max(2) as f32 * digito + 6.0;
-                let (numeros, _) = ui.allocate_exact_size(vec2(ancho, 0.0), Sense::hover());
+        self.desplazado = area
+            .show(ui, |ui| {
+                ui.horizontal_top(|ui| {
+                    // Columna de números de línea: se llena después, con las filas del texto
+                    let lineas = self.proyecto.actual().codigo.matches('\n').count() + 1;
+                    let digito = ui
+                        .painter()
+                        .layout_no_wrap("0".into(), fuente.clone(), c.tenue)
+                        .size()
+                        .x;
+                    let ancho = lineas.to_string().len().max(2) as f32 * digito + 6.0;
+                    let (numeros, _) = ui.allocate_exact_size(vec2(ancho, 0.0), Sense::hover());
 
-                let salida = egui::TextEdit::multiline(&mut self.proyecto.actual_mut().codigo)
-                    .id(id)
-                    .code_editor()
-                    .frame(Frame::new())
-                    .desired_width(f32::INFINITY)
-                    .desired_rows(40)
-                    .layouter(&mut colores)
-                    .show(ui);
-                if salida.response.changed() {
-                    self.ultimo_lienzo = false;
-                    self.compilar();
-                }
+                    let salida = egui::TextEdit::multiline(&mut self.proyecto.actual_mut().codigo)
+                        .id(id)
+                        .code_editor()
+                        .frame(Frame::new())
+                        .desired_width(f32::INFINITY)
+                        .desired_rows(40)
+                        .layouter(&mut colores)
+                        .interactive(!arrastrando)
+                        .show(ui);
+                    if salida.response.changed() {
+                        self.ultimo_lienzo = false;
+                        self.compilar();
+                    }
 
-                // La línea del cursor va más fuerte. Una línea larga ocupa varias filas
-                // (se parte al ancho del editor): el número va en la primera.
-                let cursor = salida.cursor_range.map(|r| {
-                    let codigo = &self.proyecto.actual().codigo;
-                    codigo
-                        .chars()
-                        .take(r.primary.index.into())
-                        .filter(|&ch| ch == '\n')
-                        .count()
-                        + 1
-                });
-                let mut linea = 1;
-                let mut empieza = true;
-                for fila in &salida.galley.rows {
-                    if empieza {
-                        let color = if cursor == Some(linea) {
-                            c.tinta
-                        } else {
-                            c.tenue
+                    // La línea del cursor va más fuerte. Una línea larga ocupa varias filas
+                    // (se parte al ancho del editor): el número va en la primera.
+                    let cursor = salida.cursor_range.map(|r| {
+                        let codigo = &self.proyecto.actual().codigo;
+                        codigo
+                            .chars()
+                            .take(r.primary.index.into())
+                            .filter(|&ch| ch == '\n')
+                            .count()
+                            + 1
+                    });
+                    let mut linea = 1;
+                    let mut empieza = true;
+                    for fila in &salida.galley.rows {
+                        if empieza {
+                            let color = if cursor == Some(linea) {
+                                c.tinta
+                            } else {
+                                c.tenue
+                            };
+                            ui.painter().text(
+                                pos2(numeros.right(), salida.galley_pos.y + fila.pos.y),
+                                Align2::RIGHT_TOP,
+                                linea.to_string(),
+                                fuente.clone(),
+                                color,
+                            );
+                        }
+                        empieza = fila.ends_with_newline;
+                        linea += fila.ends_with_newline as usize;
+                    }
+
+                    // Subrayado en zigzag bajo cada error de este archivo
+                    let actual = self.proyecto.actual();
+                    for (archivo, rango) in self.problemas.iter().filter_map(|p| p.lugar.as_ref()) {
+                        if *archivo != actual.nombre {
+                            continue;
+                        }
+                        let caracter = |byte: usize| {
+                            let antes = actual.codigo.get(..byte).unwrap_or(&actual.codigo);
+                            egui::text::CCursor::new(antes.chars().count())
                         };
-                        ui.painter().text(
-                            pos2(numeros.right(), salida.galley_pos.y + fila.pos.y),
-                            Align2::RIGHT_TOP,
-                            linea.to_string(),
-                            fuente.clone(),
-                            color,
+                        let desde = salida.galley.pos_from_cursor(caracter(rango.start));
+                        let hasta = salida.galley.pos_from_cursor(caracter(rango.end));
+                        // Sin ancho (fin del archivo) o partido en dos filas: un carácter
+                        let fin = if hasta.top() == desde.top() && hasta.left() > desde.left() {
+                            hasta.left()
+                        } else {
+                            desde.left() + digito
+                        };
+                        let origen = salida.galley_pos.to_vec2();
+                        zigzag(
+                            ui.painter(),
+                            desde.left() + origen.x,
+                            fin + origen.x,
+                            desde.bottom() + origen.y,
+                            c.error,
                         );
                     }
-                    empieza = fila.ends_with_newline;
-                    linea += fila.ends_with_newline as usize;
-                }
-
-                // Subrayado en zigzag bajo cada error de este archivo
-                let actual = self.proyecto.actual();
-                for (archivo, rango) in self.problemas.iter().filter_map(|p| p.lugar.as_ref()) {
-                    if *archivo != actual.nombre {
-                        continue;
-                    }
-                    let caracter = |byte: usize| {
-                        let antes = actual.codigo.get(..byte).unwrap_or(&actual.codigo);
-                        egui::text::CCursor::new(antes.chars().count())
-                    };
-                    let desde = salida.galley.pos_from_cursor(caracter(rango.start));
-                    let hasta = salida.galley.pos_from_cursor(caracter(rango.end));
-                    // Sin ancho (fin del archivo) o partido en dos filas: un carácter
-                    let fin = if hasta.top() == desde.top() && hasta.left() > desde.left() {
-                        hasta.left()
-                    } else {
-                        desde.left() + digito
-                    };
-                    let origen = salida.galley_pos.to_vec2();
-                    zigzag(
-                        ui.painter(),
-                        desde.left() + origen.x,
-                        fin + origen.x,
-                        desde.bottom() + origen.y,
-                        c.error,
-                    );
-                }
-            });
-        });
+                });
+            })
+            .state
+            .clamped_offset()
+            .y;
     }
 
     /// Click en Problemas: abre ese archivo con el cursor donde está el error
     fn ir_al_problema(&mut self, archivo: &str, byte: usize) {
+        self.parte = Vista::Codigo;
         let Some(i) = self
             .proyecto
             .archivos
@@ -2153,7 +1846,8 @@ impl Interfaz {
         }
         if self.ajustar && dibujo.contenido.is_positive() {
             self.ajustar = false;
-            let r = dibujo.contenido.expand(50.0);
+            // Más a los lados: ahí van los nombres de entradas y salidas, fuera de las cajas
+            let r = dibujo.contenido.expand2(vec2(80.0, 50.0));
             // Sin agrandar un circuito chico: se ve a tamaño normal, centrado
             self.vista = Rect::from_center_size(r.center(), r.size().max(afuera.size()));
             ui.ctx().request_repaint();
@@ -2249,7 +1943,14 @@ impl Interfaz {
         let mut x = rect.left() + 15.0;
         for (pestana, nombre) in [
             (Pestana::Problemas, titulo_problemas.as_str()),
-            (Pestana::Tabla, "Tabla de verdad"),
+            (
+                Pestana::Tabla,
+                if self.movil {
+                    "Tabla"
+                } else {
+                    "Tabla de verdad"
+                },
+            ),
             (Pestana::Ondas, "Ondas"),
             (Pestana::Salida, "Salida"),
         ] {
@@ -2316,294 +2017,7 @@ impl Interfaz {
             self.ir_al_problema(&archivo, rango.start);
         }
     }
-
-    /// Todas las combinaciones de entradas y lo que vale cada salida, con la columna
-    /// "esperado" de cada salida: verifica el circuito, crea uno desde lo esperado y lo
-    /// compara con otro archivo
-    fn tabla_de_verdad(&mut self, ui: &mut egui::Ui) {
-        let c = paleta(ui);
-        let Some(red) = &self.red else {
-            vacio(ui, "Escribe un circuito para ver su tabla de verdad.");
-            return;
-        };
-        if contar_entradas(red) > MAX_ENTRADAS_TABLA {
-            vacio(ui, "Con más de 8 entradas la tabla sería demasiado larga.");
-            return;
-        }
-        // ponytail: se simula en cada cuadro; guardar la tabla si se nota lento
-        let tabla = Tabla::de(red);
-        let circuito = red.nombre.clone();
-        let archivo = self.proyecto.actual().nombre.clone();
-        let (filas, salidas) = (tabla.filas.len(), tabla.salidas.len());
-        let esperado = self.esperado.entry(archivo.clone()).or_default();
-        if esperado.len() != filas || esperado.first().is_some_and(|f| f.len() != salidas) {
-            *esperado = vec![vec![None; salidas]; filas];
-        }
-
-        // Verificación: la primera celda marcada que no coincide
-        let marcadas = esperado.iter().flatten().filter(|e| e.is_some()).count();
-        let falla = (0..filas).find_map(|f| {
-            (0..salidas).find_map(|k| {
-                esperado[f][k]
-                    .filter(|&e| tabla.filas[f][k] != Valor::de(e))
-                    .map(|e| (f, k, e))
-            })
-        });
-        let mensaje = match falla {
-            Some((f, k, e)) => RichText::new(format!(
-                "Con {} tu salida {} da {} y debería dar {}.",
-                combinacion(&tabla, f),
-                tabla.salidas[k].0,
-                tabla.filas[f][k].simbolo(),
-                e as u8
-            ))
-            .color(c.error),
-            None if marcadas > 0 => {
-                RichText::new(format!("Las {marcadas} celdas marcadas coinciden.")).color(c.uno)
-            }
-            None => RichText::new(
-                "Llena la columna \"esperado\" (click en -) para verificar tu circuito o crear uno desde la tabla.",
-            )
-            .color(c.tenue),
-        };
-        ui.label(mensaje.size(12.0));
-
-        let mut crear = false;
-        ui.horizontal(|ui| {
-            crear = ui
-                .add_enabled(
-                    marcadas > 0,
-                    egui::Button::new("Crear circuito desde lo esperado"),
-                )
-                .on_hover_text(
-                    "Escribe el circuito más simple que da lo esperado; las celdas en - dan igual",
-                )
-                .clicked();
-            if ui
-                .add_enabled(marcadas > 0, egui::Button::new("Borrar lo esperado"))
-                .clicked()
-            {
-                esperado.iter_mut().for_each(|f| f.fill(None));
-            }
-            ui.separator();
-            ui.label("Comparar con");
-            egui::ComboBox::from_id_salt("comparar")
-                .selected_text(self.comparar.as_deref().unwrap_or("-"))
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut self.comparar, None, "-");
-                    for a in &self.proyecto.archivos {
-                        if a.nombre != archivo {
-                            ui.selectable_value(
-                                &mut self.comparar,
-                                Some(a.nombre.clone()),
-                                &a.nombre,
-                            );
-                        }
-                    }
-                });
-        });
-        if let Some(otro) = &self.comparar {
-            let (texto, color) = match comparar(&self.proyecto, &tabla, otro) {
-                Ok(texto) => (texto, c.uno),
-                Err(texto) => (texto, c.error),
-            };
-            ui.label(RichText::new(texto).size(12.0).color(color));
-        }
-        ui.add_space(6.0);
-
-        let bit = |v: Valor| RichText::new(v.simbolo()).monospace();
-        egui::Grid::new("tabla_de_verdad")
-            .striped(true)
-            .spacing(vec2(18.0, 3.0))
-            .show(ui, |ui| {
-                for nombre in &tabla.entradas {
-                    ui.label(RichText::new(nombre).monospace().strong());
-                }
-                for (nombre, _) in &tabla.salidas {
-                    ui.label(RichText::new(nombre).monospace().strong().color(c.lavanda));
-                }
-                for (nombre, _) in &tabla.salidas {
-                    ui.label(
-                        RichText::new(format!("{nombre} esperado"))
-                            .monospace()
-                            .color(c.tenue),
-                    );
-                }
-                ui.end_row();
-                for (f, celdas) in esperado.iter_mut().enumerate() {
-                    for b in tabla.fila(f) {
-                        ui.label(bit(Valor::de(b)));
-                    }
-                    for &v in &tabla.filas[f] {
-                        ui.label(bit(v).color(c.de(v)));
-                    }
-                    for (e, &v) in celdas.iter_mut().zip(&tabla.filas[f]) {
-                        let mal = e.is_some_and(|b| Valor::de(b) != v);
-                        let (texto, color) = match *e {
-                            None => ("-", c.tenue),
-                            Some(b) => (
-                                if b { "1" } else { "0" },
-                                if mal { c.error } else { c.tinta },
-                            ),
-                        };
-                        let boton =
-                            egui::Button::new(RichText::new(texto).monospace().color(color))
-                                .frame(false);
-                        if ui.add(boton).on_hover_text("Click: -, 0, 1").clicked() {
-                            *e = match *e {
-                                None => Some(false),
-                                Some(false) => Some(true),
-                                Some(true) => None,
-                            };
-                        }
-                    }
-                    ui.end_row();
-                }
-            });
-
-        if crear {
-            let n = tabla.entradas.len();
-            let productos: Vec<Vec<Producto>> = (0..salidas)
-                .map(|k| {
-                    let filas_con = |v: Option<bool>| {
-                        (0..filas)
-                            .filter(|&f| esperado[f][k] == v)
-                            .collect::<Vec<_>>()
-                    };
-                    minimizar(n, &filas_con(Some(true)), &filas_con(None))
-                })
-                .collect();
-            let nombres: Vec<String> = tabla.salidas.iter().map(|s| s.0.clone()).collect();
-            self.crear_solucion(&circuito, &tabla.entradas, &nombres, &productos);
-        }
-    }
-
-    /// Un archivo nuevo con el circuito que da lo esperado
-    fn crear_solucion(
-        &mut self,
-        circuito: &str,
-        entradas: &[String],
-        salidas: &[String],
-        productos: &[Vec<Producto>],
-    ) {
-        let base = if circuito == "main" {
-            "Solucion".to_string()
-        } else {
-            format!("{circuito}Solucion")
-        };
-        let libre = (1..100)
-            .map(|k| {
-                if k == 1 {
-                    base.clone()
-                } else {
-                    format!("{base}{k}")
-                }
-            })
-            .find(|nombre| self.proyecto.crear(nombre).is_ok());
-        let Some(nombre) = libre else {
-            self.aviso(format!("No se pudo crear el archivo {base}."));
-            return;
-        };
-        self.proyecto.actual_mut().codigo = escribir(&nombre, entradas, salidas, productos);
-        self.recompilar_desde_cero();
-        self.salida
-            .push(format!("Se creó {nombre} desde la tabla de verdad."));
-    }
 }
-
-/// Más entradas que esto hacen la tabla de verdad demasiado larga para mostrarla
-const MAX_ENTRADAS_TABLA: usize = 8;
-
-fn contar_entradas(red: &Netlist) -> usize {
-    red.nodos
-        .iter()
-        .filter(|n| matches!(n.tipo, Tipo::Entrada(..)))
-        .count()
-}
-
-/// "A=1, B=0": las entradas de la fila `f`
-fn combinacion(tabla: &Tabla, f: usize) -> String {
-    tabla
-        .entradas
-        .iter()
-        .zip(tabla.fila(f))
-        .map(|(e, v)| format!("{e}={}", v as u8))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-/// Compara la tabla del archivo abierto con la del archivo `otro`: `Ok` si hacen lo mismo
-fn comparar(proyecto: &Proyecto, tabla: &Tabla, otro: &str) -> Result<String, String> {
-    let i = proyecto
-        .archivos
-        .iter()
-        .position(|a| a.nombre == otro)
-        .ok_or_else(|| format!("{otro} ya no existe."))?;
-    let red = proyecto
-        .compilar_archivo(i)
-        .map_err(|_| format!("{otro} tiene errores: corrígelos para comparar."))?;
-    if contar_entradas(&red) > MAX_ENTRADAS_TABLA {
-        return Err(format!(
-            "{otro} tiene más de {MAX_ENTRADAS_TABLA} entradas."
-        ));
-    }
-    match logicsm_sim::diferencia(tabla, &Tabla::de(&red)) {
-        Ok(None) => Ok(format!("Hace lo mismo que {otro}.")),
-        Ok(Some((f, k, aqui, alla))) => Err(format!(
-            "No hace lo mismo que {otro}: con {}, {} da {} aquí y {} en {otro}.",
-            combinacion(tabla, f),
-            tabla.salidas[k].0,
-            aqui.simbolo(),
-            alla.simbolo()
-        )),
-        Err(e) => Err(format!("No se puede comparar con {otro}: {e}.")),
-    }
-}
-
-/// "Advertencia: la entrada `A` no se usa." por cada entrada que nada lee
-fn entradas_sin_usar(red: &Netlist) -> Vec<String> {
-    let mut leida = vec![false; red.nodos.len()];
-    for n in &red.nodos {
-        for &e in &n.entradas {
-            leida[e] = true;
-        }
-    }
-    red.nodos
-        .iter()
-        .zip(leida)
-        .filter_map(|(n, leida)| match &n.tipo {
-            Tipo::Entrada(x, _) if !leida => {
-                Some(format!("Advertencia: la entrada `{x}` no se usa."))
-            }
-            _ => None,
-        })
-        .collect()
-}
-
-/// Guarda como PNG la parte `rect` del próximo cuadro (el lienzo) y manda el resultado
-fn capturar(ctx: &egui::Context, rect: Rect, ruta: PathBuf, envio: mpsc::Sender<Exportado>) {
-    let (ppp, ctx2) = (ctx.pixels_per_point(), ctx.clone());
-    ctx.request_screenshot(move |imagen| {
-        let recorte = imagen.region(&rect, Some(ppp));
-        let [ancho, alto] = recorte.size.map(|n| n as u32);
-        let resultado = image::RgbaImage::from_raw(ancho, alto, recorte.as_raw().to_vec())
-            .ok_or_else(|| "la captura salió vacía".to_string())
-            .and_then(|img| {
-                let mut png = std::io::Cursor::new(Vec::new());
-                img.write_to(&mut png, image::ImageFormat::Png)
-                    .map_err(|e| e.to_string())?;
-                plataforma::escribir(&ruta, png.get_ref()).map_err(|e| e.to_string())
-            })
-            .map(|()| format!("Exportado: {}", ruta.display()))
-            .map_err(|e| format!("No se pudo exportar {}: {e}", ruta.display()));
-        let _ = envio.send(resultado);
-        ctx2.request_repaint();
-    });
-    ctx.request_repaint();
-}
-
-/// Espacio libre alrededor del dibujo en el SVG
-const MARGEN_SVG: f32 = 10.0;
 
 /// Agrega `circuito1 = Circuito(entradas);` en su propia línea antes de la última `}`
 /// de `codigo`, con un nombre que el código no use. Devuelve la línea, o `None` si no
@@ -2639,1227 +2053,6 @@ fn insertar_declaracion(codigo: &mut String, circuito: &str, entradas: &[&str]) 
         codigo.insert_str(fin, &format!("\n    {linea}\n"));
     }
     Some(linea)
-}
-
-/// El circuito como SVG: las figuras que egui dibujó en el lienzo, en sus coordenadas.
-/// El marco abarca todas (cables incluidos) más `MARGEN_SVG`; `fondo` es el color de atrás.
-// ponytail: solo las figuras que usa el lienzo (rect, círculo, línea, trazo, texto de una fuente por fila)
-fn svg(figuras: &[Shape], fondo: Color32) -> String {
-    let marco = figuras
-        .iter()
-        .map(Shape::visual_bounding_rect)
-        .fold(Rect::NOTHING, Rect::union)
-        .expand(MARGEN_SVG);
-    use std::fmt::Write;
-    fn color(c: Color32) -> String {
-        let [r, g, b, a] = c.to_srgba_unmultiplied();
-        if a == 0 {
-            "none".into()
-        } else {
-            format!("rgba({r},{g},{b},{:.3})", a as f32 / 255.0)
-        }
-    }
-    fn trazo(c: Color32, ancho: f32) -> String {
-        if ancho > 0.0 && c.a() > 0 {
-            format!(r#" stroke="{}" stroke-width="{ancho}""#, color(c))
-        } else {
-            String::new()
-        }
-    }
-    fn escapar(t: &str) -> String {
-        t.replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;")
-    }
-    fn figura(s: &mut String, f: &Shape) {
-        let _ = match f {
-            Shape::Vec(v) => {
-                v.iter().for_each(|f| figura(s, f));
-                Ok(())
-            }
-            Shape::Rect(r) => {
-                // El trazo de egui va adentro, afuera o en medio del borde
-                let medio = r.stroke.width / 2.0;
-                let q = match r.stroke_kind {
-                    StrokeKind::Inside => r.rect.shrink(medio),
-                    StrokeKind::Outside => r.rect.expand(medio),
-                    StrokeKind::Middle => r.rect,
-                };
-                writeln!(
-                    s,
-                    r#"<rect x="{}" y="{}" width="{}" height="{}" rx="{}" fill="{}"{}/>"#,
-                    q.left(),
-                    q.top(),
-                    q.width(),
-                    q.height(),
-                    r.corner_radius.nw,
-                    color(r.fill),
-                    trazo(r.stroke.color, r.stroke.width)
-                )
-            }
-            Shape::Circle(c) => writeln!(
-                s,
-                r#"<circle cx="{}" cy="{}" r="{}" fill="{}"{}/>"#,
-                c.center.x,
-                c.center.y,
-                c.radius,
-                color(c.fill),
-                trazo(c.stroke.color, c.stroke.width)
-            ),
-            Shape::LineSegment {
-                points: [a, b],
-                stroke,
-            } => writeln!(
-                s,
-                r#"<line x1="{}" y1="{}" x2="{}" y2="{}"{}/>"#,
-                a.x,
-                a.y,
-                b.x,
-                b.y,
-                trazo(stroke.color, stroke.width)
-            ),
-            Shape::Path(p) => {
-                let puntos: Vec<String> = p
-                    .points
-                    .iter()
-                    .map(|q| format!("{},{}", q.x, q.y))
-                    .collect();
-                let linea = match p.stroke.color {
-                    egui::epaint::ColorMode::Solid(c) => trazo(c, p.stroke.width),
-                    _ => String::new(),
-                };
-                let (etiqueta, relleno) = if p.closed {
-                    ("polygon", color(p.fill))
-                } else {
-                    ("polyline", "none".into())
-                };
-                writeln!(
-                    s,
-                    r#"<{etiqueta} points="{}" fill="{relleno}" stroke-linejoin="round"{linea}/>"#,
-                    puntos.join(" ")
-                )
-            }
-            Shape::Text(t) => {
-                let Some(seccion) = t.galley.job.sections.first() else {
-                    return;
-                };
-                let fuente = &seccion.format.font_id;
-                let familia = match fuente.family {
-                    egui::FontFamily::Monospace => "monospace",
-                    _ => "sans-serif",
-                };
-                let tinta = t.override_text_color.unwrap_or(
-                    if seccion.format.color == Color32::PLACEHOLDER {
-                        t.fallback_color
-                    } else {
-                        seccion.format.color
-                    },
-                );
-                for fila in &t.galley.rows {
-                    let r = fila.rect().translate(t.pos.to_vec2());
-                    let _ = writeln!(
-                        s,
-                        r#"<text x="{}" y="{}" font-family="{familia}" font-size="{}" fill="{}" dominant-baseline="central" xml:space="preserve">{}</text>"#,
-                        r.left(),
-                        r.center().y,
-                        fuente.size,
-                        color(tinta),
-                        escapar(&fila.text())
-                    );
-                }
-                Ok(())
-            }
-            _ => Ok(()),
-        };
-    }
-    let mut s = format!(
-        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="{} {} {} {}" width="{}" height="{}">"#,
-        marco.left(),
-        marco.top(),
-        marco.width(),
-        marco.height(),
-        marco.width(),
-        marco.height()
-    );
-    s.push('\n');
-    let _ = writeln!(
-        s,
-        r#"<rect x="{}" y="{}" width="{}" height="{}" fill="{}"/>"#,
-        marco.left(),
-        marco.top(),
-        marco.width(),
-        marco.height(),
-        color(fondo)
-    );
-    figuras.iter().for_each(|f| figura(&mut s, f));
-    s.push_str("</svg>\n");
-    s
-}
-
-/// Tabla de verdad en CSV: nombres de entradas y salidas, y una fila de 0 y 1 por combinación
-fn tabla_csv(red: &Netlist) -> Result<String, String> {
-    if contar_entradas(red) > MAX_ENTRADAS_CSV {
-        return Err(format!(
-            "tiene más de {MAX_ENTRADAS_CSV} entradas, la tabla sería demasiado grande"
-        ));
-    }
-    let tabla = Tabla::de(red);
-    let mut csv = tabla
-        .entradas
-        .iter()
-        .chain(tabla.salidas.iter().map(|(nombre, _)| nombre))
-        .map(String::as_str)
-        .collect::<Vec<_>>()
-        .join(",");
-    csv.push('\n');
-    for (f, salidas) in tabla.filas.iter().enumerate() {
-        let bits: Vec<&str> = tabla
-            .fila(f)
-            .into_iter()
-            .map(Valor::de)
-            .chain(salidas.iter().copied())
-            .map(Valor::simbolo)
-            .collect();
-        csv.push_str(&bits.join(","));
-        csv.push('\n');
-    }
-    Ok(csv)
-}
-
-// ---------- Dibujo del circuito ----------
-
-const ANCHO_COLUMNA: f32 = 130.0;
-const ALTO_FILA: f32 = 64.0;
-
-fn tamano(n: &Nodo) -> Vec2 {
-    match n.tipo {
-        Tipo::Compuerta(_) | Tipo::Memoria { .. } => {
-            vec2(46.0, (n.entradas.len() as f32 * 14.0 + 8.0).max(36.0))
-        }
-        Tipo::Entrada(..) => vec2(30.0, 24.0),
-        Tipo::Constante(_) => vec2(22.0, 22.0),
-        Tipo::Salida(_) | Tipo::Visor(..) => vec2(24.0, 24.0),
-        Tipo::Bus => vec2(10.0, 10.0),
-    }
-}
-
-fn invertida(c: Compuerta) -> bool {
-    matches!(
-        c,
-        Compuerta::Not | Compuerta::Nand | Compuerta::Nor | Compuerta::Xnor
-    )
-}
-
-/// Columna de cada pieza, al estilo de una red neuronal: lo que no tiene entradas a
-/// la izquierda, cada pieza una columna después de la más lejana que la alimenta y
-/// las salidas al final. `fuentes[i]` son las piezas que alimentan a `i`.
-// ponytail: dentro de cada columna van en orden de aparición, sin minimizar cruces
-fn columnas(fuentes: &[Vec<usize>], salida: &[bool]) -> Vec<usize> {
-    fn profundidad(
-        i: usize,
-        fuentes: &[Vec<usize>],
-        col: &mut [Option<usize>],
-        visitando: &mut [bool],
-    ) -> usize {
-        if let Some(c) = col[i] {
-            return c;
-        }
-        if visitando[i] {
-            return 0; // realimentación: no empuja la columna
-        }
-        visitando[i] = true;
-        let c = fuentes[i]
-            .iter()
-            .map(|&f| profundidad(f, fuentes, col, visitando) + 1)
-            .max()
-            .unwrap_or(0);
-        visitando[i] = false;
-        col[i] = Some(c);
-        c
-    }
-
-    let total = fuentes.len();
-    let mut col = vec![None; total];
-    let mut visitando = vec![false; total];
-    let mut cols: Vec<usize> = (0..total)
-        .map(|i| profundidad(i, fuentes, &mut col, &mut visitando))
-        .collect();
-    let ultima = cols
-        .iter()
-        .zip(salida)
-        .filter(|&(_, &s)| !s)
-        .map(|(&c, _)| c + 1)
-        .max()
-        .unwrap_or(0);
-    for (c, &s) in cols.iter_mut().zip(salida) {
-        if s {
-            *c = ultima;
-        }
-    }
-    cols
-}
-
-/// Curva de Bézier cuadrática de `a` a `b`
-fn curva(a: Pos2, control: Pos2, b: Pos2) -> impl Iterator<Item = Pos2> {
-    (0..=12).map(move |i| {
-        let s = i as f32 / 12.0;
-        let u = 1.0 - s;
-        (a.to_vec2() * u * u + control.to_vec2() * 2.0 * u * s + b.to_vec2() * s * s).to_pos2()
-    })
-}
-
-/// Contorno de la compuerta dentro de `r` (sin la burbuja de negación)
-fn contorno(c: Compuerta, r: Rect) -> Vec<Pos2> {
-    let (l, t, b, w, cy) = (r.left(), r.top(), r.bottom(), r.width(), r.center().y);
-    match c {
-        Compuerta::And | Compuerta::Nand => {
-            let mut puntos = vec![pos2(l, t)];
-            puntos.extend((0..=16).map(|i| {
-                let a = (-90.0 + 180.0 * i as f32 / 16.0_f32).to_radians();
-                pos2(
-                    l + w / 2.0 + w / 2.0 * a.cos(),
-                    cy + r.height() / 2.0 * a.sin(),
-                )
-            }));
-            puntos.push(pos2(l, b));
-            puntos
-        }
-        Compuerta::Or | Compuerta::Nor | Compuerta::Xor | Compuerta::Xnor => {
-            // La XOR deja espacio para su curva extra
-            let l = if matches!(c, Compuerta::Xor | Compuerta::Xnor) {
-                l + 6.0
-            } else {
-                l
-            };
-            let w = r.right() - l;
-            let punta = pos2(l + w, cy);
-            curva(pos2(l, t), pos2(l + w * 0.25, cy), pos2(l, b))
-                .chain(curva(pos2(l, b), pos2(l + w * 0.6, b), punta))
-                .chain(curva(punta, pos2(l + w * 0.6, t), pos2(l, t)))
-                .collect()
-        }
-        Compuerta::Not | Compuerta::Buffer | Compuerta::Tristate => {
-            vec![pos2(l, t), pos2(l + w, cy), pos2(l, b)]
-        }
-    }
-}
-
-/// Lo que se ve en el lienzo: un nodo suelto o la caja de una instancia (sus
-/// compuertas van adentro y no se dibujan).
-#[derive(Clone, Copy)]
-enum Pieza {
-    Nodo(usize),
-    Caja(usize),
-}
-
-/// Para recordar dónde la dejó el usuario aunque el código cambie
-fn clave(red: &Netlist, pieza: Pieza) -> String {
-    match pieza {
-        Pieza::Caja(g) => format!("caja {}", red.instancias[g].nombre),
-        Pieza::Nodo(i) => {
-            let n = &red.nodos[i];
-            match &n.tipo {
-                Tipo::Entrada(x, _) => format!("in {x}"),
-                Tipo::Salida(x) => format!("out {x}"),
-                Tipo::Visor(_, x) => format!("visor {x}"),
-                _ if !n.nombre.is_empty() => format!("= {}", n.nombre),
-                // ponytail: las anidadas se ubican por posición; si cambia el código pueden saltar
-                _ => format!("#{i}"),
-            }
-        }
-    }
-}
-
-/// Lo que se ve al pasar el mouse
-fn descripcion(red: &Netlist, pieza: Pieza) -> String {
-    match pieza {
-        Pieza::Caja(g) => {
-            let inst = &red.instancias[g];
-            match inst.split {
-                Some(Split::Separa) => format!("split: separa {} bits", inst.salidas.len()),
-                Some(Split::Junta) => format!("split: junta {} bits", inst.entradas.len()),
-                None if matches!(visor_de(red, g), Some(Visor::Matrix(..))) => {
-                    format!(
-                        "{}: matrix (click para cambiar a cuadrados o círculos)",
-                        inst.nombre
-                    )
-                }
-                None => format!("{}: {}", inst.nombre, inst.circuito),
-            }
-        }
-        Pieza::Nodo(i) => {
-            let n = &red.nodos[i];
-            match &n.tipo {
-                Tipo::Entrada(x, Clase::Interruptor) => {
-                    format!("Entrada {x} (click para cambiarla)")
-                }
-                Tipo::Entrada(x, Clase::Pulsador) => {
-                    format!("Pulsador {x} (vale 1 mientras lo mantienes presionado)")
-                }
-                Tipo::Entrada(x, Clase::Reloj) => {
-                    format!("Reloj {x} (lo mueven Ejecutar y Paso a paso)")
-                }
-                Tipo::Salida(x) => format!("Salida {x}"),
-                Tipo::Constante(v) => format!("Constante {}", *v as u8),
-                Tipo::Compuerta(g) if n.nombre.is_empty() => g.nombre().to_uppercase(),
-                Tipo::Compuerta(g) => format!("{} = {}", n.nombre, g.nombre().to_uppercase()),
-                Tipo::Bus => format!("{}: varios tristate", n.nombre),
-                Tipo::Visor(v, x) => format!("{} {x}", v.nombre()),
-                Tipo::Memoria { bit, .. } => format!("Memoria, bit {bit}"),
-            }
-        }
-    }
-}
-
-/// Puntos de la cuadrícula en la parte visible del lienzo
-fn puntos(ui: &egui::Ui) {
-    const PASO: f32 = 18.0;
-    let c = paleta(ui);
-    let r = ui.clip_rect();
-    // Muy alejado serían demasiados puntos: no se dibujan
-    if r.width() * r.height() / (PASO * PASO) > 40_000.0 {
-        return;
-    }
-    let p = ui.painter();
-    let mut y = (r.top() / PASO).floor() * PASO + PASO / 2.0;
-    while y < r.bottom() {
-        let mut x = (r.left() / PASO).floor() * PASO + PASO / 2.0;
-        while x < r.right() {
-            p.circle_filled(pos2(x, y), 0.9, c.puntos);
-            x += PASO;
-        }
-        y += PASO;
-    }
-}
-
-/// Lo que pasó al dibujar
-struct Dibujo {
-    /// Rectángulo que ocupan las piezas
-    contenido: Rect,
-    /// Empezó a moverse una pieza: posiciones de antes, para deshacer
-    antes: Option<Posiciones>,
-}
-
-/// Altura del pin `k` de `n` repartidos en el lado de `r`
-fn altura_pin(r: Rect, k: usize, n: usize) -> f32 {
-    r.top() + r.height() * (k + 1) as f32 / (n + 1) as f32
-}
-
-/// Dibuja el circuito en coordenadas del lienzo (dentro de un `Scene`)
-fn dibujar(
-    ui: &mut egui::Ui,
-    red: &Netlist,
-    valores: &[Valor],
-    entradas: &mut [bool],
-    posiciones: &mut Posiciones,
-    ondas: &VecDeque<Vec<Valor>>,
-    cuadradas: &mut HashSet<String>,
-) -> Dibujo {
-    let c = paleta(ui);
-    let p = ui.painter().clone();
-    let mut dibujo = Dibujo {
-        contenido: Rect::NOTHING,
-        antes: None,
-    };
-
-    // Piezas: los nodos sueltos y una caja por instancia
-    let mut piezas: Vec<Pieza> = (0..red.nodos.len())
-        .filter(|&i| red.nodos[i].instancia.is_none())
-        .map(Pieza::Nodo)
-        .collect();
-    let primera_caja = piezas.len();
-    piezas.extend((0..red.instancias.len()).map(Pieza::Caja));
-    let total = piezas.len();
-    // El visor de cada caja, buscado una sola vez por cuadro
-    let mut visores: Vec<Option<Visor>> = vec![None; red.instancias.len()];
-    for n in &red.nodos {
-        if let (Tipo::Visor(v, _), Some(g)) = (&n.tipo, n.instancia) {
-            visores[g].get_or_insert(*v);
-        }
-    }
-    let mut pieza_de = vec![0; red.nodos.len()];
-    for (j, pieza) in piezas.iter().enumerate() {
-        if let Pieza::Nodo(i) = *pieza {
-            pieza_de[i] = j;
-        }
-    }
-    for (i, n) in red.nodos.iter().enumerate() {
-        if let Some(g) = n.instancia {
-            pieza_de[i] = primera_caja + g;
-        }
-    }
-    // Nodos que alimentan cada pieza, en el orden de sus pines
-    let fuentes: Vec<Vec<usize>> = piezas
-        .iter()
-        .map(|pieza| match *pieza {
-            Pieza::Nodo(i) => red.nodos[i].entradas.clone(),
-            Pieza::Caja(g) => red.instancias[g].entradas.iter().map(|e| e.1).collect(),
-        })
-        .collect();
-    let tam = |pieza: Pieza| match pieza {
-        Pieza::Nodo(i) => tamano(&red.nodos[i]),
-        Pieza::Caja(g) => {
-            let inst = &red.instancias[g];
-            let pines = inst.entradas.len().max(inst.salidas.len());
-            if inst.split.is_some() {
-                return vec2(8.0, (pines as f32 * 16.0 + 8.0).max(30.0));
-            }
-            let ancho = (inst.circuito.len() as f32 * 7.0 + 20.0).max(96.0);
-            let alto = (pines as f32 * 18.0 + 30.0).max(48.0);
-            match visores[g] {
-                Some(Visor::Probe) => vec2(200.0, alto),
-                // Los LEDs llenan la caja; filas a la izquierda y columnas arriba
-                Some(Visor::Matrix(f, c)) => vec2(
-                    ETIQUETAS + CELDA * c as f32 + MARGEN,
-                    ARRIBA + CELDA * f as f32 + MARGEN,
-                ),
-                _ => vec2(ancho, alto),
-            }
-        }
-    };
-
-    let por_pieza: Vec<Vec<usize>> = fuentes
-        .iter()
-        .map(|f| f.iter().map(|&n| pieza_de[n]).collect())
-        .collect();
-    let salida: Vec<bool> = piezas
-        .iter()
-        .map(|pieza| matches!(*pieza, Pieza::Nodo(i) if matches!(red.nodos[i].tipo, Tipo::Salida(_))))
-        .collect();
-    let cols = columnas(&por_pieza, &salida);
-
-    // Fila de cada pieza dentro de su columna
-    let num_cols = cols.iter().max().map_or(0, |m| m + 1);
-    let mut por_columna = vec![0; num_cols];
-    let filas: Vec<usize> = cols
-        .iter()
-        .map(|&col| {
-            por_columna[col] += 1;
-            por_columna[col] - 1
-        })
-        .collect();
-    let max_filas = por_columna.iter().copied().max().unwrap_or(1);
-
-    // "Ajustar" encuadra el resultado, así que el origen da igual
-    let origen = pos2(70.0, 40.0);
-    let mut centros: Vec<Pos2> = (0..total)
-        .map(|j| {
-            let hueco = (max_filas - por_columna[cols[j]]) as f32 * ALTO_FILA / 2.0;
-            origen
-                + vec2(
-                    cols[j] as f32 * ANCHO_COLUMNA,
-                    filas[j] as f32 * ALTO_FILA + hueco,
-                )
-        })
-        .collect();
-
-    // Arrastrar mueve la pieza; click en una entrada la cambia; encima, su nombre
-    let mut k = 0;
-    for (j, &pieza) in piezas.iter().enumerate() {
-        let clave = clave(red, pieza);
-        if let Some(&[x, y]) = posiciones.get(&clave) {
-            centros[j] = pos2(x, y);
-        }
-        let r = ui.interact(
-            Rect::from_center_size(centros[j], tam(pieza)),
-            ui.scope_id().with(&clave),
-            Sense::click_and_drag(),
-        );
-        // Click en una matriz: círculos o cuadrados
-        if r.clicked()
-            && matches!(pieza, Pieza::Caja(g) if matches!(visores[g], Some(Visor::Matrix(..))))
-            && !cuadradas.remove(&clave)
-        {
-            cuadradas.insert(clave.clone());
-        }
-        if r.drag_started() {
-            dibujo.antes = Some(posiciones.clone());
-        }
-        if r.dragged() {
-            centros[j] += r.drag_delta();
-            posiciones.insert(clave, [centros[j].x, centros[j].y]);
-        }
-        if let Pieza::Nodo(i) = pieza
-            && let Tipo::Entrada(_, clase) = red.nodos[i].tipo
-        {
-            match clase {
-                Clase::Interruptor if r.clicked() => entradas[k] = !entradas[k],
-                Clase::Pulsador if r.is_pointer_button_down_on() => {
-                    entradas[k] = true;
-                    ui.ctx().request_repaint();
-                }
-                _ => {}
-            }
-            k += 1;
-        }
-        r.on_hover_text(descripcion(red, pieza))
-            .on_hover_cursor(egui::CursorIcon::Grab);
-    }
-
-    let caja = |j: usize| Rect::from_center_size(centros[j], tam(piezas[j]));
-    let valor = |i: usize| valores.get(i).copied().unwrap_or_default();
-    let color = |v: Valor| c.de(v);
-    // Relleno de entradas, salidas y LEDs: verde en 1, rojo en X
-    let relleno = |v: Valor| match v {
-        Valor::Uno => c.uno,
-        Valor::X => c.error,
-        _ => c.panel,
-    };
-
-    // Dónde sale la señal del nodo `f`: de su pieza o del pin de la caja que lo tiene
-    let pin_salida = |f: usize| {
-        let j = pieza_de[f];
-        let r = caja(j);
-        match piezas[j] {
-            Pieza::Nodo(i) => {
-                let burbuja = matches!(red.nodos[i].tipo, Tipo::Compuerta(g) if invertida(g));
-                pos2(r.right() + if burbuja { 8.0 } else { 0.0 }, r.center().y)
-            }
-            // El bus de un split sale por un solo pin, al medio
-            Pieza::Caja(g) if red.instancias[g].split == Some(Split::Junta) => r.right_center(),
-            Pieza::Caja(g) => {
-                let salidas = &red.instancias[g].salidas;
-                let k = salidas.iter().position(|s| s.1 == f).unwrap_or(0);
-                pos2(r.right(), altura_pin(r, k, salidas.len()))
-            }
-        }
-    };
-    // Matriz de la pieza `j`, si lo es: (filas, columnas, modo Individual)
-    let matriz = |j: usize| match piezas[j] {
-        Pieza::Caja(g) => match visores[g] {
-            Some(Visor::Matrix(f, cols)) => Some((
-                f,
-                cols,
-                individual(f, cols, red.instancias[g].entradas.len()),
-            )),
-            _ => None,
-        },
-        Pieza::Nodo(_) => None,
-    };
-    // Dónde llega la entrada `k` de la pieza `j`
-    let pin_entrada = |j: usize, k: usize| {
-        let r = caja(j);
-        if matches!(piezas[j], Pieza::Caja(g) if red.instancias[g].split == Some(Split::Separa)) {
-            return r.left_center();
-        }
-        // Como en LogicCircuit: cada fila llega por la izquierda y cada columna por
-        // arriba; en modo Individual, los bits de cada fila llegan juntos a su pin
-        if let Some((f, cols, individual)) = matriz(j) {
-            let rej = rejilla_matriz(r, f, cols);
-            let k = if individual { k / cols } else { k };
-            return if k < f {
-                pos2(r.left(), rej.top() + CELDA * (k as f32 + 0.5))
-            } else {
-                pos2(rej.left() + CELDA * ((k - f) as f32 + 0.5), r.top())
-            };
-        }
-        let n = fuentes[j].len();
-        let y = altura_pin(r, k, n);
-        // Las OR y XOR tienen la parte de atrás curva
-        let atras = match piezas[j] {
-            Pieza::Nodo(i) => match red.nodos[i].tipo {
-                Tipo::Compuerta(
-                    Compuerta::Or | Compuerta::Nor | Compuerta::Xor | Compuerta::Xnor,
-                ) => {
-                    let s = (k + 1) as f32 / (n + 1) as f32;
-                    0.5 * r.width() * s * (1.0 - s)
-                }
-                _ => 0.0,
-            },
-            Pieza::Caja(_) => 0.0,
-        };
-        pos2(r.left() + atras, y)
-    };
-
-    dibujo.contenido = (0..total).map(caja).fold(Rect::NOTHING, Rect::union);
-
-    // Cables (debajo de los componentes), en ángulo recto
-    let abajo = dibujo.contenido.bottom();
-    let mut lazos = 0;
-    for (j, fs) in fuentes.iter().enumerate() {
-        for (k, &fuente) in fs.iter().enumerate() {
-            let a = pin_salida(fuente);
-            let b = pin_entrada(j, k);
-            let puntos = if matriz(j).is_some_and(|(f, _, ind)| !ind && k >= f) {
-                // Columna de la matriz: sube por encima de la caja y baja al pin
-                let x = (caja(j).left() - 14.0 - 5.0 * k as f32).max(a.x + 6.0);
-                let y = b.y - 10.0 - 6.0 * k as f32;
-                vec![a, pos2(x, a.y), pos2(x, y), pos2(b.x, y), b]
-            } else if b.x > a.x + 12.0 {
-                let x = (b.x - 14.0 - 5.0 * k as f32).max(a.x + 6.0);
-                vec![a, pos2(x, a.y), pos2(x, b.y), b]
-            } else {
-                // Realimentación: sale a la derecha, pasa por debajo de todo y vuelve
-                let y = abajo + 18.0 + 8.0 * lazos as f32;
-                lazos += 1;
-                vec![
-                    a,
-                    pos2(a.x + 10.0, a.y),
-                    pos2(a.x + 10.0, y),
-                    pos2(b.x - 10.0, y),
-                    pos2(b.x - 10.0, b.y),
-                    b,
-                ]
-            };
-            p.add(Shape::line(puntos, Stroke::new(1.6, color(valor(fuente)))));
-        }
-    }
-
-    // Componentes
-    let trazo = Stroke::new(1.6, c.tinta);
-    let texto = |pos: Pos2, alinear: Align2, t: &str| {
-        p.text(pos, alinear, t, FontId::monospace(12.0), c.tinta);
-    };
-    for (j, &pieza) in piezas.iter().enumerate() {
-        let r = caja(j);
-        let i = match pieza {
-            Pieza::Nodo(i) => i,
-            Pieza::Caja(g) if red.instancias[g].split.is_some() => {
-                // Split: barra con el número de cada bit sobre su pin
-                let inst = &red.instancias[g];
-                p.rect_filled(r, 2.0, c.tinta);
-                let (pines, x, alinear) = match inst.split {
-                    Some(Split::Separa) => (&inst.salidas, r.right() + 3.0, Align2::LEFT_BOTTOM),
-                    _ => (&inst.entradas, r.left() - 3.0, Align2::RIGHT_BOTTOM),
-                };
-                for (k, (nombre, _)) in pines.iter().enumerate() {
-                    let y = altura_pin(r, k, pines.len());
-                    p.text(
-                        pos2(x, y - 1.0),
-                        alinear,
-                        nombre,
-                        FontId::monospace(9.0),
-                        c.tenue,
-                    );
-                }
-                continue;
-            }
-            Pieza::Caja(g) => {
-                // Caja con el nombre del circuito, la instancia arriba y los pines rotulados
-                let inst = &red.instancias[g];
-                let visor = visores[g];
-                let pequeno = FontId::monospace(10.0);
-                p.text(
-                    r.center_top() - vec2(0.0, 4.0),
-                    Align2::CENTER_BOTTOM,
-                    &inst.nombre,
-                    FontId::monospace(11.0),
-                    c.tenue,
-                );
-                // La matriz se dibuja como un módulo de hardware, sin la caja de siempre
-                if let Some(Visor::Matrix(filas, columnas)) = visor {
-                    let luces: Vec<Valor> = inst.entradas.iter().map(|e| valor(e.1)).collect();
-                    let cuadrada = cuadradas.contains(&clave(red, pieza));
-                    dibujar_matriz(&p, r, filas, columnas, &luces, cuadrada);
-                    continue;
-                }
-                p.rect(r, 6.0, c.panel, trazo, StrokeKind::Inside);
-                p.text(
-                    r.center_top() + vec2(0.0, 5.0),
-                    Align2::CENTER_TOP,
-                    &inst.circuito,
-                    FontId::proportional(11.0),
-                    c.tinta,
-                );
-                for (k, (nombre, _)) in inst.entradas.iter().enumerate() {
-                    let y = altura_pin(r, k, inst.entradas.len());
-                    p.text(
-                        pos2(r.left() + 5.0, y),
-                        Align2::LEFT_CENTER,
-                        nombre,
-                        pequeno.clone(),
-                        c.tenue,
-                    );
-                }
-                for (k, (nombre, _)) in inst.salidas.iter().enumerate() {
-                    let y = altura_pin(r, k, inst.salidas.len());
-                    p.text(
-                        pos2(r.right() - 5.0, y),
-                        Align2::RIGHT_CENTER,
-                        nombre,
-                        pequeno.clone(),
-                        c.tenue,
-                    );
-                }
-                if let Some(visor) = visor {
-                    let bits: Vec<usize> = inst.entradas.iter().map(|e| e.1).collect();
-                    dibujar_visor(&p, c, r, visor, &bits, &valor, ondas);
-                }
-                continue;
-            }
-        };
-        let v = valor(i);
-        match &red.nodos[i].tipo {
-            Tipo::Entrada(nombre, _) => {
-                p.rect(r, 5.0, relleno(v), trazo, StrokeKind::Inside);
-                texto(r.center(), Align2::CENTER_CENTER, v.simbolo());
-                texto(
-                    r.left_center() - vec2(8.0, 0.0),
-                    Align2::RIGHT_CENTER,
-                    nombre,
-                );
-            }
-            Tipo::Constante(v) => {
-                p.rect(r, 3.0, c.suave, trazo, StrokeKind::Inside);
-                texto(
-                    r.center(),
-                    Align2::CENTER_CENTER,
-                    if *v { "1" } else { "0" },
-                );
-            }
-            Tipo::Salida(nombre) => {
-                p.circle(r.center(), r.width() / 2.0, relleno(v), trazo);
-                texto(
-                    r.right_center() + vec2(8.0, 0.0),
-                    Align2::LEFT_CENTER,
-                    nombre,
-                );
-            }
-            // Solo el LED va suelto: los demás visores son cajas
-            Tipo::Visor(_, nombre) => {
-                let v = red.nodos[i]
-                    .entradas
-                    .first()
-                    .map_or(Valor::X, |&e| valor(e));
-                p.circle(r.center(), r.width() / 2.0, relleno(v), trazo);
-                p.circle_stroke(r.center(), r.width() / 2.0 - 4.0, Stroke::new(1.0, c.tenue));
-                texto(
-                    r.right_center() + vec2(8.0, 0.0),
-                    Align2::LEFT_CENTER,
-                    nombre,
-                );
-            }
-            Tipo::Bus => {
-                p.circle_filled(r.center(), r.width() / 2.0, color(v));
-            }
-            // Siempre va dentro de su caja
-            Tipo::Memoria { .. } => {
-                p.rect(r, 3.0, c.panel, trazo, StrokeKind::Inside);
-            }
-            Tipo::Compuerta(g) => {
-                p.add(Shape::closed_line(contorno(*g, r), trazo));
-                if matches!(g, Compuerta::Xor | Compuerta::Xnor) {
-                    let (l, w) = (r.left(), r.width());
-                    let extra = curva(
-                        r.left_top(),
-                        pos2(l + w * 0.25, r.center().y),
-                        r.left_bottom(),
-                    );
-                    p.add(Shape::line(extra.collect(), trazo));
-                }
-                if invertida(*g) {
-                    p.circle_stroke(r.right_center() + vec2(4.0, 0.0), 4.0, trazo);
-                }
-            }
-        }
-    }
-    dibujo
-}
-
-/// Lado de cada LED de una `matrix`
-const CELDA: f32 = 22.0;
-/// Espacio de los nombres de las filas (izquierda) y las columnas (arriba) de una
-/// `matrix`, y borde alrededor de sus LEDs
-const ETIQUETAS: f32 = 24.0;
-const ARRIBA: f32 = 18.0;
-const MARGEN: f32 = 3.0;
-
-/// Dónde van los LEDs dentro de la caja `r` de una `matrix`
-fn rejilla_matriz(r: Rect, filas: usize, columnas: usize) -> Rect {
-    Rect::from_min_size(
-        r.min + vec2(ETIQUETAS, ARRIBA),
-        vec2(CELDA * columnas as f32, CELDA * filas as f32),
-    )
-}
-
-/// Modo Individual de una `matrix` (un bit por LED) según cuántos bits recibe
-fn individual(filas: usize, columnas: usize, bits: usize) -> bool {
-    bits == filas * columnas && bits != filas + columnas
-}
-
-/// Una `matrix` como módulo de hardware: placa verde con pines dorados (filas a la
-/// izquierda, columnas arriba) y los LEDs en un bloque negro. Los colores son fijos,
-/// iguales en los dos temas. `luces` son sus pines: en modo Selector, primero las
-/// filas y después las columnas; en modo Individual, un bit por LED, fila por fila.
-fn dibujar_matriz(
-    p: &egui::Painter,
-    r: Rect,
-    filas: usize,
-    columnas: usize,
-    luces: &[Valor],
-    cuadrada: bool,
-) {
-    let placa = Color32::from_rgb(0x1f, 0x5c, 0x3c);
-    let borde_placa = Color32::from_rgb(0x15, 0x42, 0x2b);
-    let serigrafia = Color32::from_rgb(0xe8, 0xee, 0xe9);
-    let oro = Color32::from_rgb(0xd4, 0xa8, 0x3a);
-    let bloque = Color32::from_rgb(0x14, 0x15, 0x15);
-    let apagado = Color32::from_rgb(0x2c, 0x2e, 0x2d);
-    let encendido = Color32::from_rgb(0xff, 0x4a, 0x3a);
-    let brillo = Color32::from_rgba_unmultiplied(0xff, 0x4a, 0x3a, 70);
-    let reflejo = Color32::from_rgba_unmultiplied(255, 255, 255, 120);
-
-    let individual = individual(filas, columnas, luces.len());
-    let rejilla = rejilla_matriz(r, filas, columnas);
-
-    // Placa con un agujero de montaje en la esquina libre
-    p.rect(
-        r,
-        3.0,
-        placa,
-        Stroke::new(1.5, borde_placa),
-        StrokeKind::Inside,
-    );
-    p.circle(
-        r.left_top() + vec2(ETIQUETAS, ARRIBA) * 0.5,
-        3.0,
-        borde_placa,
-        Stroke::new(1.2, oro),
-    );
-
-    // Pines dorados en el borde, donde llegan los cables, y su nombre serigrafiado.
-    // En modo Individual solo hay pines de filas (cada uno con los bits de su fila)
-    let pines = if individual { filas } else { filas + columnas };
-    for k in 0..pines {
-        let nombre = if k < filas {
-            format!("F{k}")
-        } else {
-            format!("C{}", k - filas)
-        };
-        let (pin, texto, alinear) = if k < filas {
-            let y = rejilla.top() + CELDA * (k as f32 + 0.5);
-            (
-                Rect::from_min_size(pos2(r.left(), y - 2.0), vec2(6.0, 4.0)),
-                pos2(r.left() + 8.0, y),
-                Align2::LEFT_CENTER,
-            )
-        } else {
-            let x = rejilla.left() + CELDA * ((k - filas) as f32 + 0.5);
-            (
-                Rect::from_min_size(pos2(x - 2.0, r.top()), vec2(4.0, 5.0)),
-                pos2(x, r.top() + 6.0),
-                Align2::CENTER_TOP,
-            )
-        };
-        p.rect_filled(pin, 1.0, oro);
-        p.text(texto, alinear, nombre, FontId::monospace(8.0), serigrafia);
-    }
-
-    // Bloque negro de los LEDs. Como en LogicCircuit, solo cuenta el 1 (0, X y Z
-    // apagan): en modo Selector se enciende con su fila y su columna en 1; en modo
-    // Individual, con su propio bit
-    p.rect_filled(rejilla.expand(2.0), 2.0, bloque);
-    let uno = |i: usize| luces[i] == Valor::Uno;
-    for f in 0..filas {
-        for k in 0..columnas {
-            let prendido = if individual {
-                uno(f * columnas + k)
-            } else {
-                uno(f) && uno(filas + k)
-            };
-            let esquina = rejilla.min + vec2(k as f32, f as f32) * CELDA;
-            let celda = Rect::from_min_size(esquina, Vec2::splat(CELDA)).shrink(2.5);
-            let color = if prendido { encendido } else { apagado };
-            if cuadrada {
-                if prendido {
-                    p.rect_filled(celda.expand(2.0), 4.0, brillo);
-                }
-                p.rect_filled(celda, 2.0, color);
-            } else {
-                let radio = celda.width() / 2.0;
-                if prendido {
-                    p.circle_filled(celda.center(), radio + 2.0, brillo);
-                }
-                p.circle_filled(celda.center(), radio, color);
-            }
-            if prendido {
-                p.circle_filled(celda.min + Vec2::splat(celda.width() * 0.3), 1.6, reflejo);
-            }
-        }
-    }
-}
-
-/// El visor (display, matriz o sonda) que se dibuja en la caja `g`
-fn visor_de(red: &Netlist, g: usize) -> Option<Visor> {
-    red.nodos.iter().find_map(|n| match n.tipo {
-        Tipo::Visor(v, _) if n.instancia == Some(g) => Some(v),
-        _ => None,
-    })
-}
-
-/// El contenido de la caja de un display o una sonda: los segmentos o las ondas.
-/// `bits` son los nodos de sus pines, en orden.
-fn dibujar_visor(
-    p: &egui::Painter,
-    c: &Paleta,
-    r: Rect,
-    visor: Visor,
-    bits: &[usize],
-    valor: &dyn Fn(usize) -> Valor,
-    ondas: &VecDeque<Vec<Valor>>,
-) {
-    // A la izquierda quedan los nombres de los pines y arriba el del visor
-    let area = Rect::from_min_max(
-        pos2(r.left() + 24.0, r.top() + 22.0),
-        r.right_bottom() - vec2(8.0, 8.0),
-    );
-    // Encendido verde, apagado gris claro, X y Z con su color
-    let luz = |v: Valor| match v {
-        Valor::Uno => c.uno,
-        Valor::Cero => c.suave,
-        _ => c.de(v),
-    };
-    match visor {
-        Visor::Display7 => {
-            let alto = area.height().min(area.width() * 1.6);
-            let d = Rect::from_center_size(area.center(), vec2(alto * 0.5, alto));
-            let (tl, tr, ml, mr, bl, br) = (
-                d.left_top(),
-                d.right_top(),
-                d.left_center(),
-                d.right_center(),
-                d.left_bottom(),
-                d.right_bottom(),
-            );
-            // a, b, c, d, e, f, g
-            let segmentos = [
-                (tl, tr),
-                (tr, mr),
-                (mr, br),
-                (bl, br),
-                (ml, bl),
-                (tl, ml),
-                (ml, mr),
-            ];
-            for (k, (a, b)) in segmentos.into_iter().enumerate() {
-                let corte = (b - a).normalized() * 3.5;
-                let v = valor(bits[k]);
-                p.line_segment([a + corte, b - corte], Stroke::new(5.0, luz(v)));
-            }
-            p.circle_filled(br + vec2(7.0, -2.0), 3.0, luz(valor(bits[7])));
-        }
-        // Una línea por señal, la muestra más nueva a la derecha
-        Visor::Probe => {
-            let ancho = area.width() / MUESTRAS as f32;
-            let inicio = MUESTRAS - ondas.len();
-            let alto = (r.height() / (bits.len() + 1) as f32 * 0.3).min(6.0);
-            for (k, &e) in bits.iter().enumerate() {
-                let y = altura_pin(r, k, bits.len());
-                let mut antes: Option<f32> = None;
-                for (s, muestra) in ondas.iter().enumerate() {
-                    let v = muestra.get(e).copied().unwrap_or_default();
-                    let x = area.left() + (inicio + s) as f32 * ancho;
-                    let altura = match v {
-                        Valor::Uno => y - alto,
-                        Valor::Cero => y + alto,
-                        _ => y,
-                    };
-                    if let Some(a) = antes.filter(|&a| a != altura) {
-                        p.line_segment([pos2(x, a), pos2(x, altura)], Stroke::new(1.0, c.tenue));
-                    }
-                    p.line_segment(
-                        [pos2(x, altura), pos2(x + ancho, altura)],
-                        Stroke::new(1.5, c.de(v)),
-                    );
-                    antes = Some(altura);
-                }
-            }
-        }
-        // La matriz se dibuja aparte y el LED va suelto
-        Visor::Matrix(..) | Visor::Led => {}
-    }
-}
-
-/// Pone en `v` todas las entradas de la clase `clase`. Devuelve si alguna estaba en 1.
-fn poner(red: &Netlist, entradas: &mut [bool], clase: Clase, v: bool) -> bool {
-    let mut habia = false;
-    let de_entrada = red.nodos.iter().filter_map(|n| match n.tipo {
-        Tipo::Entrada(_, k) => Some(k),
-        _ => None,
-    });
-    for (e, k) in entradas.iter_mut().zip(de_entrada) {
-        if k == clase {
-            habia |= *e;
-            *e = v;
-        }
-    }
-    habia
-}
-
-/// Guarda los valores de la red para las sondas: en cada medio ciclo del reloj
-/// (`tic`) o cuando cambia una señal que miran
-fn muestrear(red: &Netlist, valores: &[Valor], ondas: &mut VecDeque<Vec<Valor>>, tic: bool) {
-    let mut sondas = red
-        .nodos
-        .iter()
-        .filter(|n| matches!(n.tipo, Tipo::Visor(Visor::Probe, _)))
-        .flat_map(|n| n.entradas.iter())
-        .peekable();
-    if sondas.peek().is_none() {
-        return;
-    }
-    let cambio = ondas
-        .back()
-        .is_none_or(|u| sondas.any(|&e| u.get(e) != valores.get(e)));
-    if tic || cambio {
-        if ondas.len() == MUESTRAS {
-            ondas.pop_front();
-        }
-        ondas.push_back(valores.to_vec());
-    }
-}
-
-/// "0,5 Hz", "10 Hz"
-fn hz(f: f64) -> String {
-    format!("{f} Hz").replace('.', ",")
-}
-
-/// Encabezado de 38 px con línea inferior, para el editor y el lienzo
-fn cabecera(ui: &mut egui::Ui, texto: &str) {
-    let c = paleta(ui);
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 38.0), Sense::hover());
-    let p = ui.painter();
-    p.rect_filled(rect, 0.0, c.panel);
-    p.line_segment(
-        [rect.left_bottom(), rect.right_bottom()],
-        Stroke::new(1.0, c.linea),
-    );
-    p.text(
-        pos2(rect.left() + 13.0, rect.center().y),
-        Align2::LEFT_CENTER,
-        texto,
-        FontId::proportional(12.0),
-        c.tinta,
-    );
-}
-
-enum Lado {
-    Izquierda,
-    Abajo,
-    Derecha,
-}
-
-/// Muestra u oculta un panel. Dibuja la ventana con ese panel marcado, como en VS Code:
-/// relleno si se ve, solo el borde si está oculto.
-fn boton_panel(ui: &mut egui::Ui, visible: bool, lado: Lado, ayuda: &str) -> bool {
-    let c = paleta(ui);
-    let (rect, r) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::click());
-    let p = ui.painter();
-    if r.hovered() {
-        p.rect_filled(rect, 5.0, c.suave);
-    }
-    let color = if visible { c.tinta } else { c.tenue };
-    let trazo = Stroke::new(1.2, color);
-    let marco = Rect::from_center_size(rect.center(), vec2(16.0, 12.0));
-    let parte = match lado {
-        Lado::Izquierda => Rect::from_min_max(marco.min, pos2(marco.left() + 5.0, marco.bottom())),
-        Lado::Abajo => Rect::from_min_max(pos2(marco.left(), marco.bottom() - 4.0), marco.max),
-        Lado::Derecha => Rect::from_min_max(pos2(marco.right() - 5.0, marco.top()), marco.max),
-    };
-    if visible {
-        p.rect_filled(parte, 0.0, color);
-    } else {
-        p.rect_stroke(parte, 0.0, trazo, StrokeKind::Inside);
-    }
-    p.rect_stroke(marco, 2.0, trazo, StrokeKind::Inside);
-    r.on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text(ayuda)
-        .clicked()
-}
-
-#[derive(Clone, Copy)]
-enum Icono {
-    Ejecutar,
-    Pausa,
-    Paso,
-    Reiniciar,
-    Luna,
-    Sol,
-}
-
-/// Botón plano con un ícono dibujado a la izquierda del texto
-fn boton(ui: &mut egui::Ui, texto: &str, icono: Icono, principal: bool) -> egui::Response {
-    let c = paleta(ui);
-    let (fondo, borde, color) = if principal {
-        (c.salvia_fondo, c.salvia_borde, c.salvia_texto)
-    } else {
-        (c.panel, c.linea, c.tinta)
-    };
-    // Los espacios dejan lugar para el ícono
-    let r = ui.add(
-        egui::Button::new(
-            RichText::new(format!("     {texto}"))
-                .size(12.5)
-                .color(color),
-        )
-        .fill(fondo)
-        .stroke(Stroke::new(1.0, borde))
-        .min_size(vec2(0.0, 28.0)),
-    );
-    let centro = pos2(r.rect.left() + 15.0, r.rect.center().y);
-    let p = ui.painter();
-    let trazo = Stroke::new(1.5, color);
-    match icono {
-        Icono::Ejecutar => {
-            let triangulo = vec![
-                centro + vec2(-4.0, -5.0),
-                centro + vec2(5.0, 0.0),
-                centro + vec2(-4.0, 5.0),
-            ];
-            p.add(Shape::convex_polygon(triangulo, color, Stroke::NONE));
-        }
-        Icono::Pausa => {
-            for x in [-3.0, 3.0] {
-                let barra = Rect::from_center_size(centro + vec2(x, 0.0), vec2(3.0, 10.0));
-                p.rect_filled(barra, 1.0, color);
-            }
-        }
-        Icono::Paso => {
-            let triangulo = vec![
-                centro + vec2(-5.0, -5.0),
-                centro + vec2(2.0, 0.0),
-                centro + vec2(-5.0, 5.0),
-            ];
-            p.add(Shape::convex_polygon(triangulo, color, Stroke::NONE));
-            p.line_segment([centro + vec2(5.0, -5.0), centro + vec2(5.0, 5.0)], trazo);
-        }
-        Icono::Reiniciar => {
-            // ↻: arco de 290° abierto abajo que termina en una punta rellena
-            let radio = 5.0;
-            let punto = |g: f32| {
-                let a = g.to_radians();
-                centro + radio * vec2(-a.cos(), a.sin())
-            };
-            let arco: Vec<Pos2> = (0..=24)
-                .map(|i| punto(40.0 - 290.0 * i as f32 / 24.0))
-                .collect();
-            let fin = arco[arco.len() - 1];
-            let a = (40.0_f32 - 290.0).to_radians();
-            // Tangente en el sentido del recorrido y dirección hacia afuera del círculo
-            let tangente = vec2(-a.sin(), -a.cos());
-            let afuera = vec2(-a.cos(), a.sin());
-            p.add(Shape::line(arco, trazo));
-            p.add(Shape::convex_polygon(
-                vec![fin + afuera * 3.0, fin + tangente * 3.5, fin - afuera * 3.0],
-                color,
-                Stroke::NONE,
-            ));
-        }
-        Icono::Luna => {
-            // Círculo tapado por otro del color del fondo
-            p.circle_filled(centro, 5.5, color);
-            p.circle_filled(centro + vec2(2.8, -2.2), 4.6, fondo);
-        }
-        Icono::Sol => {
-            p.circle_filled(centro, 2.8, color);
-            for i in 0..8 {
-                let a = (i as f32 * 45.0).to_radians();
-                let d = vec2(a.cos(), a.sin());
-                p.line_segment([centro + d * 4.6, centro + d * 6.4], trazo);
-            }
-        }
-    }
-    r
 }
 
 #[cfg(test)]

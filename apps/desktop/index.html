@@ -21,17 +21,36 @@
       body {
         margin: 0;
         height: 100%;
+        /* En el celular, el alto que queda sin las barras del navegador */
+        height: 100dvh;
         overflow: hidden;
+        overscroll-behavior: none;
         background: #f8f8f5;
       }
       canvas {
         display: block;
         width: 100%;
         height: 100%;
+        /* Los gestos (arrastrar, pellizcar) van a la app y no hacen zoom en la página */
+        touch-action: none;
+        /* Encima del aviso de carga: lo tapa en cuanto la app dibuja el primer cuadro */
+        position: relative;
+        z-index: 1;
+      }
+      .cargando {
+        position: fixed;
+        inset: 0;
+        margin: 0;
+        display: grid;
+        place-items: center;
+        font: 15px system-ui, sans-serif;
+        color: #7f827e;
       }
     </style>
   </head>
   <body>
     <canvas id="logicsm"></canvas>
+    <p class="cargando">Cargando LogicSM…</p>
+    <noscript class="cargando">LogicSM necesita JavaScript para funcionar.</noscript>
   </body>
 </html>

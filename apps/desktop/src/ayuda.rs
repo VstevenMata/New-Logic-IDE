@@ -280,20 +280,25 @@ pub fn guia(ui: &mut egui::Ui) {
     );
 
     seccion(ui, "Compuertas");
-    egui::Grid::new("guia_compuertas")
-        .striped(true)
-        .spacing(vec2(24.0, 4.0))
+    // En el celular la tabla se desliza de lado
+    egui::ScrollArea::horizontal()
+        .id_salt("guia_compuertas")
         .show(ui, |ui| {
-            for (nombre, uso) in [
-                ("and, or, xor", "2 o más entradas: and(A, B, C)"),
-                ("nand, nor, xnor", "2 o más entradas: nor(A, B)"),
-                ("not", "1 entrada: not(A)"),
-                ("buffer", "1 entrada: buffer(A)"),
-            ] {
-                ui.label(RichText::new(nombre).monospace().strong());
-                ui.label(RichText::new(uso).monospace());
-                ui.end_row();
-            }
+            egui::Grid::new("guia_compuertas")
+                .striped(true)
+                .spacing(vec2(24.0, 4.0))
+                .show(ui, |ui| {
+                    for (nombre, uso) in [
+                        ("and, or, xor", "2 o más entradas: and(A, B, C)"),
+                        ("nand, nor, xnor", "2 o más entradas: nor(A, B)"),
+                        ("not", "1 entrada: not(A)"),
+                        ("buffer", "1 entrada: buffer(A)"),
+                    ] {
+                        ui.label(RichText::new(nombre).monospace().strong());
+                        ui.label(RichText::new(uso).monospace());
+                        ui.end_row();
+                    }
+                });
         });
     ui.label("Cada llamada es una compuerta nueva. Se pueden anidar:");
     codigo(ui, "Y = or(X, not(C));   // la salida del not entra al or");
@@ -458,34 +463,39 @@ pub fn guia(ui: &mut egui::Ui) {
 }
 
 pub fn atajos(ui: &mut egui::Ui) {
-    egui::Grid::new("atajos")
-        .striped(true)
-        .spacing(vec2(32.0, 6.0))
+    // En el celular la tabla se desliza de lado
+    egui::ScrollArea::horizontal()
+        .id_salt("atajos")
         .show(ui, |ui| {
-            for (accion, atajo) in [
-                ("Nuevo proyecto", "Ctrl+N"),
-                ("Abrir proyecto", "Ctrl+O"),
-                ("Guardar", "Ctrl+S"),
-                ("Guardar como", "Ctrl+Shift+S"),
-                ("Salir", "Ctrl+Q"),
-                ("Deshacer (texto o movimiento en el lienzo)", "Ctrl+Z"),
-                ("Rehacer", "Ctrl+Y"),
-                ("Cortar / Copiar / Pegar", "Ctrl+X / Ctrl+C / Ctrl+V"),
-                ("Seleccionar todo", "Ctrl+A"),
-                ("Acercar / Alejar", "Ctrl++ / Ctrl+-"),
-                ("Tamaño normal", "Ctrl+0"),
-                ("Panel de proyecto", "Ctrl+B"),
-                ("Panel inferior", "Ctrl+J"),
-                ("Entradas y salidas", "Ctrl+Alt+B"),
-                ("Ejecutar / Pausa", "F5"),
-                ("Paso a paso (medio ciclo del reloj)", "F10"),
-                ("Reiniciar simulación", "Ctrl+Shift+F5"),
-                ("Guía del lenguaje", "F1"),
-            ] {
-                ui.label(accion);
-                ui.label(RichText::new(atajo).monospace());
-                ui.end_row();
-            }
+            egui::Grid::new("atajos")
+                .striped(true)
+                .spacing(vec2(32.0, 6.0))
+                .show(ui, |ui| {
+                    for (accion, atajo) in [
+                        ("Nuevo proyecto", "Ctrl+N"),
+                        ("Abrir proyecto", "Ctrl+O"),
+                        ("Guardar", "Ctrl+S"),
+                        ("Guardar como", "Ctrl+Shift+S"),
+                        ("Salir", "Ctrl+Q"),
+                        ("Deshacer (texto o movimiento en el lienzo)", "Ctrl+Z"),
+                        ("Rehacer", "Ctrl+Y"),
+                        ("Cortar / Copiar / Pegar", "Ctrl+X / Ctrl+C / Ctrl+V"),
+                        ("Seleccionar todo", "Ctrl+A"),
+                        ("Acercar / Alejar", "Ctrl++ / Ctrl+-"),
+                        ("Tamaño normal", "Ctrl+0"),
+                        ("Panel de proyecto", "Ctrl+B"),
+                        ("Panel inferior", "Ctrl+J"),
+                        ("Entradas y salidas", "Ctrl+Alt+B"),
+                        ("Ejecutar / Pausa", "F5"),
+                        ("Paso a paso (medio ciclo del reloj)", "F10"),
+                        ("Reiniciar simulación", "Ctrl+Shift+F5"),
+                        ("Guía del lenguaje", "F1"),
+                    ] {
+                        ui.label(accion);
+                        ui.label(RichText::new(atajo).monospace());
+                        ui.end_row();
+                    }
+                });
         });
 }
 
