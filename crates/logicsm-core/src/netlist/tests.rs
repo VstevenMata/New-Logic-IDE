@@ -9,7 +9,8 @@ fn errores(fuente: &str) -> Vec<String> {
         .collect()
 }
 
-const MEDIO_SUMADOR: &str = "circuit MedioSumador { in A, B; out Suma, Acarreo; Suma = xor(A, B); Acarreo = and(A, B); }";
+const MEDIO_SUMADOR: &str =
+    "circuit MedioSumador { in A, B; out Suma, Acarreo; Suma = xor(A, B); Acarreo = and(A, B); }";
 
 const SUMADOR_4: &str = "
     circuit FullAdder { in A, B, Cin; out Sum, Cout;
@@ -25,8 +26,7 @@ const SUMADOR_4: &str = "
 
 #[test]
 fn conecta_en_cualquier_orden_y_con_realimentacion() {
-    let red =
-        compilar("circuit FF { in S, R; out Q; Q = nor(R, Qn); Qn = nor(S, Q); }").unwrap();
+    let red = compilar("circuit FF { in S, R; out Q; Q = nor(R, Qn); Qn = nor(S, Q); }").unwrap();
     // S, R, nor de Q, nor de Qn, salida Q
     assert_eq!(red.nodos.len(), 5);
     assert_eq!(red.nodos[2].entradas, [1, 3]); // Q = nor(R, Qn)
@@ -193,10 +193,9 @@ fn buses_bit_a_bit_y_unir() {
         .unwrap();
     assert_eq!(z1.entradas, [18]);
     // Separar: entra el bus por un pin, salen los bits numerados
-    let red = compilar(
-        "circuit S { in A[2]; out a0, a1; a = split.derecha(A); a0 = a[0]; a1 = a[1]; }",
-    )
-    .unwrap();
+    let red =
+        compilar("circuit S { in A[2]; out a0, a1; a = split.derecha(A); a0 = a[0]; a1 = a[1]; }")
+            .unwrap();
     assert_eq!(red.instancias[0].split, Some(super::Split::Separa));
     assert_eq!(red.instancias[0].salidas[1].0, "1");
 }
@@ -309,9 +308,7 @@ fn errores_de_memorias_y_visores() {
     );
     assert_eq!(
         con("matrix M(2, 3, A, B);"),
-        [
-            "`matrix` lleva 5 bits: 2 filas y 3 columnas (o 6 bits, uno por LED), pero recibe 3 bits"
-        ]
+        ["`matrix` lleva 5 bits: 2 filas y 3 columnas (o 6 bits, uno por LED), pero recibe 3 bits"]
     );
     assert!(compilar("main { in A[2], B; matrix M(1, 3, A, B); }").is_ok());
     assert_eq!(
@@ -341,9 +338,7 @@ fn errores_de_buses() {
 
     assert_eq!(
         errores("main { in A[4], B[2]; out X[4]; X = and(A, B); }"),
-        [
-            "las entradas de `and` deben tener el mismo ancho (o 1 bit): hay de 4 bits y de 2 bits"
-        ]
+        ["las entradas de `and` deben tener el mismo ancho (o 1 bit): hay de 4 bits y de 2 bits"]
     );
     assert_eq!(
         errores("main { in A[4]; out X; X = A; }"),
