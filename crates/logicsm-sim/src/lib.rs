@@ -577,4 +577,49 @@ mod tests {
             assert_eq!(salidas(&red, &e), esperado, "{a} + {b} + {c}");
         }
     }
+
+    #[test]
+    fn latch_sr_oscila_al_soltar_set_y_reset_juntos() {
+        let red = logicsm_core::compilar(
+            "circuit FF { in S, R; out Q; Q = nor(R, Qn); Qn = nor(S, Q); }",
+        )
+        .unwrap();
+        let mut e = Estado::default();
+        // S = R = 1 deja Q = Qn = 0; al soltarlos juntos pasan los dos a 1, luego a 0...
+        assert!(simular(&red, &mut e, &[true, true]));
+        assert_eq!(salidas(&red, &e), [Cero]);
+        assert!(!simular(&red, &mut e, &[false, false]));
+    }
+
+    #[test]
+    fn contador_de_2_bits_con_flip_flops() {
+        // Flip-flop D maestro-esclavo y un contador asíncrono: cada uno cambia con su
+        // Qn y el reloj del segundo es el Qn del primero
+        let red = logicsm_core::compilar(
+            "circuit LatchD { in D, E; out Q, Qn;
+                 Q = nor(and(not(D), E), Qn); Qn = nor(and(D, E), Q); }
+             circuit FlipFlopD { in D, C; out Q, Qn;
+                 m = LatchD(D, not(C)); s = LatchD(m.Q, C);
+                 Q = s.Q; Qn = s.Qn; }
+             main { in CLK; out Q0, Q1;
+                 f0 = FlipFlopD(n0, CLK); f1 = FlipFlopD(n1, n0);
+                 n0 = f0.Qn; n1 = f1.Qn;
+                 Q0 = f0.Q; Q1 = f1.Q; }",
+        )
+        .unwrap();
+        let cuenta = |e: &Estado| {
+            let s = salidas(&red, e);
+            usize::from(s[0].bit().unwrap()) + 2 * usize::from(s[1].bit().unwrap())
+        };
+        let mut e = Estado::default();
+        e.reiniciar(&red);
+        assert!(simular(&red, &mut e, &[false]));
+        let inicio = cuenta(&e);
+        // Cada flanco de subida del reloj suma 1
+        for k in 1..=8 {
+            assert!(simular(&red, &mut e, &[true]));
+            assert!(simular(&red, &mut e, &[false]));
+            assert_eq!(cuenta(&e), (inicio + k) % 4, "flanco {k}");
+        }
+    }
 }

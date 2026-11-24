@@ -370,6 +370,46 @@ mod tests {
         }
     }
 
+    /// El ejemplo `titulo` compilado (su último archivo queda abierto)
+    fn ejemplo(titulo: &str) -> Netlist {
+        let (_, archivos) = crate::ayuda::EJEMPLOS
+            .iter()
+            .find(|(t, _)| *t == titulo)
+            .unwrap();
+        let mut p = Proyecto::nuevo();
+        p.agregar(archivos);
+        p.compilar().unwrap()
+    }
+
+    #[test]
+    fn el_sumador_de_4_bits_suma() {
+        let tabla = logicsm_sim::Tabla::de(&ejemplo("Sumador de 4 bits (buses y for)"), false);
+        // Entradas A[0..3], B[0..3]; salidas S[0..3], Cout: el bit 0 va primero
+        assert_eq!(tabla.entradas.len(), 8);
+        let numero = |bits: &[bool]| bits.iter().rev().fold(0, |n, &b| n * 2 + usize::from(b));
+        for (f, salidas) in tabla.filas.iter().enumerate() {
+            let e = tabla.fila(f);
+            let s: Vec<bool> = salidas.iter().map(|v| v.bit().unwrap()).collect();
+            assert_eq!(numero(&e[..4]) + numero(&e[4..]), numero(&s), "fila {f}");
+        }
+    }
+
+    #[test]
+    fn el_latch_d_recuerda() {
+        let red = ejemplo("Latch D");
+        let q = red
+            .nodos
+            .iter()
+            .position(|n| matches!(&n.tipo, logicsm_core::netlist::Tipo::Salida(s) if s == "Q"))
+            .unwrap();
+        let mut e = logicsm_sim::Estado::default();
+        // (D, E) → Q: copia a D mientras E = 1 y recuerda con E = 0
+        for (d, en, valor) in [(1, 1, 1), (1, 0, 1), (0, 0, 1), (0, 1, 0), (1, 0, 0)] {
+            assert!(logicsm_sim::simular(&red, &mut e, &[d == 1, en == 1]));
+            assert_eq!(e.valores[q].bit(), Some(valor == 1), "D = {d}, E = {en}");
+        }
+    }
+
     #[test]
     fn circuitos_de_otros_archivos_y_errores_ubicados() {
         let mut p = Proyecto::nuevo();

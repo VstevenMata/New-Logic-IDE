@@ -39,9 +39,8 @@ pub fn minimizar(n: usize, unos: &[usize], libres: &[usize]) -> Vec<Producto> {
         }
     }
 
-    // Primero los esenciales (únicos que cubren alguna fila), después el que cubre más
-    // de lo que falta con menos entradas.
-    // ponytail: la parte voraz no siempre da el mínimo absoluto; método de Petrick si hace falta
+    // Primero los esenciales (únicos que cubren alguna fila), después la menor cantidad
+    // de primos que cubre lo que falta
     let cubre = |(fijos, valor): (usize, usize), f: usize| f & fijos == valor;
     let mut elegidos: Vec<(usize, usize)> = Vec::new();
     for &f in unos {
@@ -52,21 +51,28 @@ pub fn minimizar(n: usize, unos: &[usize], libres: &[usize]) -> Vec<Producto> {
             elegidos.push(p);
         }
     }
-    let mut falta: Vec<usize> = unos
+    let falta: Vec<usize> = unos
         .iter()
         .copied()
         .filter(|&f| !elegidos.iter().any(|&p| cubre(p, f)))
         .collect();
+    // Una solución voraz (el que cubre más de lo que falta, con menos entradas) sirve de
+    // cota para buscar la mínima
+    let mut voraz = Vec::new();
+    let mut quedan = falta.clone();
     while let Some(&mejor) = primos.iter().max_by_key(|&&p| {
-        let nuevas = falta.iter().filter(|&&f| cubre(p, f)).count();
+        let nuevas = quedan.iter().filter(|&&f| cubre(p, f)).count();
         (nuevas, std::cmp::Reverse(p.0.count_ones()))
     }) {
-        if falta.is_empty() {
+        if quedan.is_empty() {
             break;
         }
-        falta.retain(|&f| !cubre(mejor, f));
-        elegidos.push(mejor);
+        quedan.retain(|&f| !cubre(mejor, f));
+        voraz.push(mejor);
     }
+    let mut mejor = Some(voraz);
+    cubrir(&falta, &primos, &mut Vec::new(), &mut mejor);
+    elegidos.extend(mejor.unwrap_or_default());
 
     elegidos
         .into_iter()
@@ -79,6 +85,42 @@ pub fn minimizar(n: usize, unos: &[usize], libres: &[usize]) -> Vec<Producto> {
                 .collect()
         })
         .collect()
+}
+
+/// Busca en `mejor` los primos que cubren todas las filas de `falta` con la menor
+/// cantidad y, si empatan, con menos entradas: prueba cada primo que cubre la primera
+/// fila sin cubrir (lo mismo que el método de Petrick, sin desarrollar el producto).
+// ponytail: exponencial en el peor caso; la tabla de verdad llega a 8 entradas y la cota
+// voraz poda casi todo
+fn cubrir(
+    falta: &[usize],
+    primos: &[(usize, usize)],
+    elegidos: &mut Vec<(usize, usize)>,
+    mejor: &mut Option<Vec<(usize, usize)>>,
+) {
+    let costo = |v: &[(usize, usize)]| {
+        let entradas: u32 = v.iter().map(|p| p.0.count_ones()).sum();
+        (v.len(), entradas)
+    };
+    let cubre = |(fijos, valor): (usize, usize), f: usize| f & fijos == valor;
+    let sin_cubrir = falta
+        .iter()
+        .find(|&&f| !elegidos.iter().any(|&p| cubre(p, f)));
+    let Some(&f) = sin_cubrir else {
+        if mejor.as_ref().is_none_or(|m| costo(elegidos) < costo(m)) {
+            *mejor = Some(elegidos.clone());
+        }
+        return;
+    };
+    // Falta al menos uno más: con tantos como la mejor ya no se gana
+    if mejor.as_ref().is_some_and(|m| elegidos.len() >= m.len()) {
+        return;
+    }
+    for &p in primos.iter().filter(|&&p| cubre(p, f)) {
+        elegidos.push(p);
+        cubrir(falta, primos, elegidos, mejor);
+        elegidos.pop();
+    }
 }
 
 /// El circuito `nombre` con esas entradas y salidas (un nombre por bit: `A`, `B[0]`...)
@@ -164,6 +206,16 @@ mod tests {
             expresion(&entradas, &minimizar(2, &[1, 2], &[3])),
             "or(B, A)"
         );
+    }
+
+    #[test]
+    fn minimo_aunque_no_haya_esenciales() {
+        // 0, 1, 2, 5, 6, 7: seis primos de dos filas, ninguno esencial. Elegir por
+        // cantidad puede dar 4; el mínimo es 3 (como A'B' + BC' + AC)
+        let p = minimizar(3, &[0, 1, 2, 5, 6, 7], &[]);
+        assert_eq!(p.len(), 3, "{p:?}");
+        // Y cada producto tiene 2 entradas
+        assert!(p.iter().all(|t| t.iter().flatten().count() == 2));
     }
 
     #[test]
