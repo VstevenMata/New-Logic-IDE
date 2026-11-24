@@ -69,8 +69,10 @@ jobs:
     needs: [version, compilar]
     runs-on: ubuntu-latest
     steps:
+      # Solo los ejecutables: sin el patrón también baja el paquete de la web (github-pages)
       - uses: actions/download-artifact@v4
         with:
+          pattern: logicsm-*
           path: dist
           merge-multiple: true
       # Crea el tag en el commit del merge y el release con los ejecutables
