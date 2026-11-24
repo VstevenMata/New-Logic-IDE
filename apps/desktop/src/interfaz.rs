@@ -119,6 +119,8 @@ pub struct Interfaz {
     esperado: HashMap<String, Vec<Vec<Option<bool>>>>,
     /// Archivo con el que se compara el abierto en la tabla de verdad
     comparar: Option<String>,
+    /// La tabla de verdad parte desde Reset en vez de todo en X (útil con latches)
+    desde_reset: bool,
     /// Matrices de LEDs con cuadrados en vez de círculos (clave de la pieza), por archivo
     // ponytail: solo mientras la app está abierta; guardarlo en el .SA si se pide
     cuadradas: HashMap<String, HashSet<String>>,
@@ -282,6 +284,7 @@ impl Interfaz {
             avisos: Vec::new(),
             esperado: HashMap::new(),
             comparar: None,
+            desde_reset: false,
             cuadradas: HashMap::new(),
             entradas: Vec::new(),
             estado: Estado::default(),

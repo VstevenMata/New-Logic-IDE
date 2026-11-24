@@ -25,6 +25,8 @@ pub struct Estado {
     ram: Vec<Vec<u64>>,
     /// Último valor del reloj de cada memoria, para escribir en el flanco de subida
     reloj: Vec<Valor>,
+    /// Un nodo de cada memoria (todos sus bits tienen las mismas entradas)
+    nodo_de_memoria: Vec<Option<usize>>,
 }
 
 /// Los nodos que se recalculan con retardo; entradas y constantes cambian al
@@ -79,14 +81,27 @@ impl Estado {
             })
             .collect();
         self.reloj = vec![inicial; red.memorias.len()];
+        self.nodo_de_memoria = vec![None; red.memorias.len()];
+        for (i, nodo) in red.nodos.iter().enumerate() {
+            if let Tipo::Memoria { memoria, .. } = nodo.tipo {
+                self.nodo_de_memoria[memoria] = Some(i);
+            }
+        }
         self.tiempo = 0;
     }
 
     /// Botón Reset: todo en 0 (entradas incluidas), también las RAM. Después se
     /// asienta cambiando cada nodo al instante y en orden: con todo en 0 un
     /// flip-flop arranca simétrico (Q = Qn = 0) y con retardo oscilaría para siempre.
+    /// Mientras se asienta no escribe en las RAM.
     pub fn reiniciar(&mut self, red: &Netlist) {
         self.preparar(red, Valor::Cero);
+        self.asentar(red);
+        self.flancos(red, false);
+    }
+
+    /// Recalcula cada nodo al instante y en orden hasta que nada cambie
+    fn asentar(&mut self, red: &Netlist) {
         for _ in 0..limite(red) {
             let mut cambio = false;
             for (i, nodo) in red.nodos.iter().enumerate() {
@@ -121,6 +136,7 @@ impl Estado {
                 }
             }
         }
+        self.flancos(red, true);
         if self.pendientes.is_empty() {
             return false;
         }
@@ -157,8 +173,33 @@ impl Estado {
         }
     }
 
+    /// Flanco de subida del reloj de cada RAM: con escribir en 1 guarda el dato en la
+    /// dirección. Va antes de calcular, así todos los bits leen la palabra ya escrita.
+    /// Con `escribir` en `false` solo recuerda el reloj.
+    fn flancos(&mut self, red: &Netlist, escribir: bool) {
+        for (k, m) in red.memorias.iter().enumerate() {
+            let Some(i) = self.nodo_de_memoria[k].filter(|_| m.ram) else {
+                continue;
+            };
+            let v = |j: usize| self.valores[red.nodos[i].entradas[j]];
+            let d = m.direccion;
+            let reloj = v(d + m.dato + 1);
+            let (direccion, dato) = (numero((0..d).map(v)), numero((d..d + m.dato).map(v)));
+            // ponytail: con la dirección o el dato en X no escribe nada
+            if escribir
+                && self.reloj[k] == Valor::Cero
+                && reloj == Valor::Uno
+                && v(d + m.dato) == Valor::Uno
+                && let (Some(a), Some(x)) = (direccion, dato)
+            {
+                self.ram[k][a as usize] = x;
+            }
+            self.reloj[k] = reloj;
+        }
+    }
+
     /// El valor que debe tener el nodo `i` según sus entradas
-    fn calcular(&mut self, red: &Netlist, i: usize) -> Valor {
+    fn calcular(&self, red: &Netlist, i: usize) -> Valor {
         let nodo = &red.nodos[i];
         let v = |k: usize| self.valores[nodo.entradas[k]];
         match nodo.tipo {
@@ -184,17 +225,6 @@ impl Estado {
                 let d = m.direccion;
                 let direccion = numero((0..d).map(v)).map(|a| a as usize);
                 let palabra = if m.ram {
-                    let dato = numero((d..d + m.dato).map(v));
-                    let (escribir, reloj) = (v(d + m.dato), v(d + m.dato + 1));
-                    // ponytail: con la dirección o el dato en X no escribe nada
-                    if self.reloj[memoria] == Valor::Cero
-                        && reloj == Valor::Uno
-                        && escribir == Valor::Uno
-                        && let (Some(a), Some(x)) = (direccion, dato)
-                    {
-                        self.ram[memoria][a] = x;
-                    }
-                    self.reloj[memoria] = reloj;
                     direccion.map(|a| self.ram[memoria][a])
                 } else {
                     direccion.map(|a| m.datos.get(a).copied().unwrap_or(0))
@@ -218,7 +248,7 @@ pub fn simular(red: &Netlist, estado: &mut Estado, entradas: &[bool]) -> bool {
 }
 
 /// Tabla de verdad: cada fila parte de cero (todo en X), así que en circuitos con
-/// memoria muestra X y no lo guardado.
+/// memoria muestra X y no lo guardado; o parte desde Reset (todo en 0 y asentado).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Tabla {
     /// Nombre de cada entrada, en el orden de los `in`, `button` y `clock`
@@ -231,7 +261,7 @@ pub struct Tabla {
 
 impl Tabla {
     /// Simula todas las combinaciones. Son 2^n filas: quien llama limita las entradas.
-    pub fn de(red: &Netlist) -> Tabla {
+    pub fn de(red: &Netlist, desde_reset: bool) -> Tabla {
         let mut entradas = Vec::new();
         let mut salidas = Vec::new();
         for (i, n) in red.nodos.iter().enumerate() {
@@ -249,6 +279,9 @@ impl Tabla {
         tabla.filas = (0..1usize << tabla.entradas.len())
             .map(|f| {
                 let mut estado = Estado::default();
+                if desde_reset {
+                    estado.reiniciar(red);
+                }
                 simular(red, &mut estado, &tabla.fila(f));
                 tabla
                     .salidas
@@ -441,8 +474,22 @@ mod tests {
     }
 
     #[test]
+    fn tabla_de_un_latch_desde_reset() {
+        let red = logicsm_core::compilar(
+            "circuit FF { in S, R; out Q; Q = nor(R, Qn); Qn = nor(S, Q); }",
+        )
+        .unwrap();
+        // Desde X, sin set ni reset no se sabe qué guarda
+        assert_eq!(Tabla::de(&red, false).filas[0], [X]);
+        // Desde Reset todo es conocido: (S, R) = 00, 01, 10, 11
+        let filas = Tabla::de(&red, true).filas;
+        assert!(filas.iter().flatten().all(|&v| v != X), "{filas:?}");
+        assert_eq!((filas[1][0], filas[2][0]), (Cero, Uno));
+    }
+
+    #[test]
     fn equivalencia_por_nombre() {
-        let t = |codigo: &str| Tabla::de(&logicsm_core::compilar(codigo).unwrap());
+        let t = |codigo: &str| Tabla::de(&logicsm_core::compilar(codigo).unwrap(), false);
         let nand = t("main { in A, B; out X; X = nand(A, B); }");
         // De Morgan, con las entradas declaradas en otro orden
         let de_morgan = t("main { in B, A; out X; X = or(not(A), not(B)); }");
@@ -465,7 +512,7 @@ mod tests {
         for funcion in 0..256usize {
             let unos: Vec<usize> = (0..8).filter(|f| funcion >> f & 1 == 1).collect();
             let codigo = escribir("F", &entradas, &salidas, &[minimizar(3, &unos, &[])]);
-            let tabla = Tabla::de(&logicsm_core::compilar(&codigo).unwrap());
+            let tabla = Tabla::de(&logicsm_core::compilar(&codigo).unwrap(), false);
             for (f, fila) in tabla.filas.iter().enumerate() {
                 assert_eq!(
                     *fila,

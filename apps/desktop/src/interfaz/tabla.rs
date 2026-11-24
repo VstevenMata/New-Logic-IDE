@@ -17,7 +17,7 @@ impl Interfaz {
             return;
         }
         // ponytail: se simula en cada cuadro; guardar la tabla si se nota lento
-        let tabla = Tabla::de(red);
+        let tabla = Tabla::de(red, self.desde_reset);
         let circuito = red.nombre.clone();
         let archivo = self.proyecto.actual().nombre.clone();
         let (filas, salidas) = (tabla.filas.len(), tabla.salidas.len());
@@ -71,6 +71,12 @@ impl Interfaz {
             {
                 esperado.iter_mut().for_each(|f| f.fill(None));
             }
+            // Solo hace falta si hay memoria: sin Reset una fila arranca en X
+            if self.desde_reset || tabla.filas.iter().flatten().any(|&v| v == Valor::X) {
+                ui.separator();
+                ui.checkbox(&mut self.desde_reset, "Partir desde Reset")
+                    .on_hover_text("Cada fila arranca con todo en 0, como después del botón Reset");
+            }
             ui.separator();
             ui.label("Comparar con");
             egui::ComboBox::from_id_salt("comparar")
@@ -89,7 +95,7 @@ impl Interfaz {
                 });
         });
         if let Some(otro) = &self.comparar {
-            let (texto, color) = match comparar(&self.proyecto, &tabla, otro) {
+            let (texto, color) = match comparar(&self.proyecto, &tabla, otro, self.desde_reset) {
                 Ok(texto) => (texto, c.uno),
                 Err(texto) => (texto, c.error),
             };
@@ -221,7 +227,12 @@ pub(super) fn combinacion(tabla: &Tabla, f: usize) -> String {
 }
 
 /// Compara la tabla del archivo abierto con la del archivo `otro`: `Ok` si hacen lo mismo
-pub(super) fn comparar(proyecto: &Proyecto, tabla: &Tabla, otro: &str) -> Result<String, String> {
+pub(super) fn comparar(
+    proyecto: &Proyecto,
+    tabla: &Tabla,
+    otro: &str,
+    desde_reset: bool,
+) -> Result<String, String> {
     let i = proyecto
         .archivos
         .iter()
@@ -235,7 +246,7 @@ pub(super) fn comparar(proyecto: &Proyecto, tabla: &Tabla, otro: &str) -> Result
             "{otro} tiene más de {MAX_ENTRADAS_TABLA} entradas."
         ));
     }
-    match logicsm_sim::diferencia(tabla, &Tabla::de(&red)) {
+    match logicsm_sim::diferencia(tabla, &Tabla::de(&red, desde_reset)) {
         Ok(None) => Ok(format!("Hace lo mismo que {otro}.")),
         Ok(Some((f, k, aqui, alla))) => Err(format!(
             "No hace lo mismo que {otro}: con {}, {} da {} aquí y {} en {otro}.",
