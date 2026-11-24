@@ -452,6 +452,8 @@ pub fn guia(ui: &mut egui::Ui) {
          circuito más simple que la cumple, en un archivo nuevo.",
         "\"Comparar con\" dice si el circuito abierto hace lo mismo que otro archivo y, si no, \
          en qué combinación difieren.",
+        "Con latches o flip-flops la tabla sale en X (cada fila arranca sin saber qué \
+         guardan): marca \"Partir desde Reset\" para que arranquen en 0.",
         "Problemas avisa de las entradas que el circuito no usa.",
         "Con un clock en el circuito, Ejecutar (F5) lo hace latir con la frecuencia elegida \
          en la barra y Paso a paso (F10) avanza medio ciclo. Todos los clock laten juntos.",

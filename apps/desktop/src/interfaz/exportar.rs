@@ -458,7 +458,7 @@ pub(super) fn tabla_csv(red: &Netlist) -> Result<String, String> {
             "tiene más de {MAX_ENTRADAS_CSV} entradas, la tabla sería demasiado grande"
         ));
     }
-    let tabla = Tabla::de(red);
+    let tabla = Tabla::de(red, false);
     let mut csv = tabla
         .entradas
         .iter()
