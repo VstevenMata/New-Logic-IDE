@@ -1,7 +1,7 @@
 # Instalador de LogicSM para Windows:
-#   irm https://raw.githubusercontent.com/VstevenMata/New-Logic-IDE/main/instalar.ps1 | iex
+#   irm https://raw.githubusercontent.com/VstevenMata/logicsm/main/instalar.ps1 | iex
 # Sin preguntas (instala, o actualiza si ya está instalado):
-#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/VstevenMata/New-Logic-IDE/main/instalar.ps1))) -Si
+#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/VstevenMata/logicsm/main/instalar.ps1))) -Si
 # LogicSM lleva este script adentro: "logicsm update" y "logicsm delete" lo abren en una ventana nueva.
 param([switch]$Si, [string]$Dir, [switch]$Desinstalar, [int]$Esperar)
 
@@ -11,7 +11,7 @@ $ErrorActionPreference = 'Stop'
 # La barra de Invoke-WebRequest hace la descarga mucho más lenta en Windows PowerShell 5
 if ($PSVersionTable.PSVersion.Major -lt 6) { $ProgressPreference = 'SilentlyContinue' }
 
-$Repo = 'VstevenMata/New-Logic-IDE'
+$Repo = 'VstevenMata/logicsm'
 $Nombre = 'LogicSM'
 $Cmd = 'logicsm'
 # Como Code.exe en VS Code: en la carpeta se ve LogicSM, y el comando logicsm igual funciona (Windows no distingue mayúsculas)

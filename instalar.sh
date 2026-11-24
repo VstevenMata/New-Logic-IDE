@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Instalador de LogicSM para Linux y macOS:
-#   curl -fsSL https://raw.githubusercontent.com/VstevenMata/New-Logic-IDE/main/instalar.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/VstevenMata/logicsm/main/instalar.sh | bash
 # Sin preguntas (instala, o actualiza si ya está instalado):
-#   curl -fsSL https://raw.githubusercontent.com/VstevenMata/New-Logic-IDE/main/instalar.sh | bash -s -- -y
+#   curl -fsSL https://raw.githubusercontent.com/VstevenMata/logicsm/main/instalar.sh | bash -s -- -y
 # LogicSM lleva este script adentro: "logicsm update" y "logicsm delete" lo usan.
 set -euo pipefail
 
-REPO=VstevenMata/New-Logic-IDE
+REPO=VstevenMata/logicsm
 NOMBRE=LogicSM
 CMD=logicsm
 

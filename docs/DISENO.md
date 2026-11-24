@@ -13,7 +13,7 @@ Inspirado en LogicCircuit, pero con una diferencia clave: los circuitos y compon
 
 Que un estudiante pueda:
 
-1. Escribir un circuito en Logic_F-4:13.
+1. Escribir un circuito en LogicSM.
 2. Compilarlo y ver el circuito dibujado automáticamente.
 3. Activar entradas (interruptores, pulsadores, reloj) y ver las señales cambiar en tiempo real.
 4. Crear sus propios componentes (un flip-flop, un sumador…) y reutilizarlos en otros circuitos.
@@ -268,7 +268,7 @@ Funcionan sin IA, con algoritmos exactos dentro del compilador y el simulador. N
 | **Errores con sugerencia** | *"`FlipFlp` no existe, ¿quisiste decir `FlipFlop`?"*, *"AND3 espera 3 entradas, recibió 2"* | Distancia de edición entre nombres; verificación de cantidades y anchos |
 | **Tabla de verdad** | Genera la tabla completa del circuito seleccionado | El simulador prueba todas las combinaciones de entradas |
 | **Verificación** | *"Con A=1, B=0 tu salida da 0 y debería dar 1"* | El estudiante llena la columna "esperado" en el panel de la tabla de verdad y el simulador marca las filas que fallan |
-| **Solución** | A partir de una tabla de verdad, genera el circuito mínimo ya escrito en Logic_F-4:13 | Implicantes primos (como Quine-McCluskey); primero los esenciales y después el que cubre más filas. Las celdas sin marcar dan igual |
+| **Solución** | A partir de una tabla de verdad, genera el circuito mínimo ya escrito en LogicSM | Implicantes primos (como Quine-McCluskey); primero los esenciales y después el que cubre más filas. Las celdas sin marcar dan igual |
 | **Equivalencia** | Dice si dos circuitos hacen lo mismo y, si no, muestra la combinación donde difieren | Comparación de tablas de verdad |
 
 ---
@@ -296,8 +296,8 @@ endmodule
 
 LogicCircuit guarda los proyectos en XML (`.CircuitProject`) con elementos `LogicalCircuit` (cada circuito), `Pin` (entradas y salidas), `CircuitSymbol` (componente colocado en la cuadrícula, con `X`/`Y`) y `Wire` (tramo de cable `X1,Y1 → X2,Y2`). Los cables se conectan **por coordenadas**: un cable está conectado a un pin si su punta cae exactamente sobre él.
 
-- **Exportar** (Logic_F-4:13 → LogicCircuit): la conexión lógica sale del IR y las posiciones del layout por capas, ajustado a la cuadrícula de LogicCircuit. Cada circuito propio se exporta como un `LogicalCircuit`, así que se conserva la jerarquía. Pendiente: confirmar en su esquema (`Schema/CircuitProject.xml`) cómo identifica las compuertas predefinidas y sus atributos.
-- **Importar** (LogicCircuit → Logic_F-4:13): leer el XML, reconstruir las conexiones a partir de la geometría y generar código `.SA`. Así un estudiante puede ver sus circuitos de LogicCircuit escritos como código.
+- **Exportar** (LogicSM → LogicCircuit): la conexión lógica sale del IR y las posiciones del layout por capas, ajustado a la cuadrícula de LogicCircuit. Cada circuito propio se exporta como un `LogicalCircuit`, así que se conserva la jerarquía. Pendiente: confirmar en su esquema (`Schema/CircuitProject.xml`) cómo identifica las compuertas predefinidas y sus atributos.
+- **Importar** (LogicCircuit → LogicSM): leer el XML, reconstruir las conexiones a partir de la geometría y generar código `.SA`. Así un estudiante puede ver sus circuitos de LogicCircuit escritos como código.
 
 LogicCircuit es GPL-2.0: se implementa un lector/escritor propio del formato, sin copiar su código.
 
@@ -312,14 +312,9 @@ LogicCircuit es GPL-2.0: se implementa un lector/escritor propio del formato, si
 | Tecnología | Para qué |
 |---|---|
 | `eframe` / `egui` | Ventana, editor, lienzo del circuito y paneles |
-| `egui_dock` | Paneles acoplables tipo IDE |
 | `rfd` | Diálogos nativos de abrir y guardar |
-| `serde` + `serde_json` | Configuración y posiciones del dibujo |
-| `notify` | Vigilar el `.SA` del proyecto y recargarlo si cambia afuera |
-| `quick-xml` | Exportar e importar proyectos de LogicCircuit |
-| `ariadne` | Errores con el código subrayado en `logicsm-cli` |
-| `egui_plot` | Pestaña de ondas |
-| `cargo test` + `insta` | Tests del compilador y del simulador; `insta` guarda la salida esperada del parser y de los errores |
+| `quick-xml` | Exportar e importar proyectos de LogicCircuit (fase 8, todavía no está) |
+| `cargo test` | Tests del compilador, del simulador y del solucionador |
 | GitHub Actions | CI en cada PR (`fmt`, `clippy`, `test`) y release automático al fusionar a `main` un cambio de versión |
 | Nix flake | Entorno de desarrollo reproducible (opcional) |
 
@@ -357,7 +352,7 @@ código .SA → Lexer → Parser → AST → Análisis semántico → Elaboraci�
 ### Workspace
 
 ```
-New-Logic-IDE/
+logicsm/
 ├── Cargo.toml              # workspace
 ├── crates/
 │   ├── logicsm-core/       # lexer, parser, AST, semántica, elaboración → IR
@@ -369,7 +364,7 @@ New-Logic-IDE/
 
 `logicsm-cli` solo prueba las compuertas predefinidas (`and`, `nor`, `xor`… con n entradas) y no tiene lógica propia: llama a `logicsm-core` y `logicsm-sim`. No se incluye en el release.
 
-Dependencias del desktop: `eframe`, `egui_dock` (paneles tipo IDE), `rfd` (diálogos de archivo), `serde`.
+Dependencias del desktop: `eframe` (con persistencia), `rfd` (diálogos de archivo), `arboard` (portapapeles), `image` (PNG) y, en la web, `wasm-bindgen-futures`, `web-sys` y `js-sys`.
 
 El editor de código usa el **lexer real** del compilador para el resaltado de sintaxis, y los diagnósticos salen del análisis semántico.
 

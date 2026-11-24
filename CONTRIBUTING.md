@@ -1,4 +1,4 @@
-# Cómo contribuir a Logic_F-4:13
+# Cómo contribuir a LogicSM
 
 ¡Gracias por tu interés! Esta guía explica cómo proponer cambios.
 

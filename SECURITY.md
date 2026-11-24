@@ -2,7 +2,7 @@
 
 ## Versiones con soporte
 
-Solo la última versión publicada en [Releases](https://github.com/VstevenMata/New-Logic-IDE/releases) recibe correcciones de seguridad.
+Solo la última versión publicada en [Releases](https://github.com/VstevenMata/logicsm/releases) recibe correcciones de seguridad.
 
 ## Reportar una vulnerabilidad
 

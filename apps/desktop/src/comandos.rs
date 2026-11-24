@@ -3,7 +3,7 @@
 
 use std::process::{Command, ExitCode};
 
-const URL: &str = "https://raw.githubusercontent.com/VstevenMata/New-Logic-IDE/main";
+const URL: &str = "https://raw.githubusercontent.com/VstevenMata/logicsm/main";
 
 pub fn ejecutar(orden: &str) -> ExitCode {
     consola();

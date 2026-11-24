@@ -55,14 +55,14 @@ Los que ya lo tienen instalado se actualizan con `logicsm update`.
 
 | Sistema | Comando |
 |---|---|
-| Linux / macOS | `curl -fsSL https://raw.githubusercontent.com/VstevenMata/New-Logic-IDE/main/instalar.sh \| bash` |
-| Windows (PowerShell) | `irm https://raw.githubusercontent.com/VstevenMata/New-Logic-IDE/main/instalar.ps1 \| iex` |
-| NixOS | `nix run github:VstevenMata/New-Logic-IDE` |
+| Linux / macOS | `curl -fsSL https://raw.githubusercontent.com/VstevenMata/logicsm/main/instalar.sh \| bash` |
+| Windows (PowerShell) | `irm https://raw.githubusercontent.com/VstevenMata/logicsm/main/instalar.ps1 \| iex` |
+| NixOS | `nix run github:VstevenMata/logicsm` |
 
 Para instalar sin preguntas, agrega `-s -- -y` en Linux/macOS:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/VstevenMata/New-Logic-IDE/main/instalar.sh | bash -s -- -y
+curl -fsSL https://raw.githubusercontent.com/VstevenMata/logicsm/main/instalar.sh | bash -s -- -y
 ```
 
 ## Comandos después de instalar

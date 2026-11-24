@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/VstevenMata/New-Logic-IDE/releases/latest"><img src="https://img.shields.io/github/v/release/VstevenMata/New-Logic-IDE?label=versión" alt="Última versión"></a>
+  <a href="https://github.com/VstevenMata/logicsm/releases/latest"><img src="https://img.shields.io/github/v/release/VstevenMata/logicsm?label=versión" alt="Última versión"></a>
   <a href="#licencia"><img src="https://img.shields.io/badge/licencia-MIT%20%2F%20Apache--2.0-blue" alt="Licencia"></a>
 </p>
 
@@ -33,28 +33,28 @@ circuit HalfAdder {
 - **Simular en tiempo real** con interruptores, pulsadores, reloj y paso a paso.
 - **Crear componentes propios** y reutilizarlos: de compuertas a sumadores, ALU y una CPU educativa.
 - **Aprender con ayudas exactas:** errores con sugerencia, tabla de verdad y verificación de resultados.
-- **Exportar** a Verilog y a LogicCircuit.
+- **Exportar** a Verilog y a LogicCircuit (próximamente).
 
 ## Instalación
 
-**En el navegador**, sin instalar nada: <https://vstevenmata.github.io/New-Logic-IDE/>. El proyecto se guarda en el navegador; Guardar lo descarga como `.SA`.
+**En el navegador**, sin instalar nada: <https://vstevenmata.github.io/logicsm/>. El proyecto se guarda en el navegador; Guardar lo descarga como `.SA`.
 
 **Linux y macOS**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/VstevenMata/New-Logic-IDE/main/instalar.sh | bash
+curl -fsSL https://raw.githubusercontent.com/VstevenMata/logicsm/main/instalar.sh | bash
 ```
 
 **Windows** (PowerShell)
 
 ```powershell
-irm https://raw.githubusercontent.com/VstevenMata/New-Logic-IDE/main/instalar.ps1 | iex
+irm https://raw.githubusercontent.com/VstevenMata/logicsm/main/instalar.ps1 | iex
 ```
 
 **NixOS**
 
 ```bash
-nix run github:VstevenMata/New-Logic-IDE
+nix run github:VstevenMata/logicsm
 ```
 
 Después se abre con `logicsm` y se actualiza con `logicsm update`.
