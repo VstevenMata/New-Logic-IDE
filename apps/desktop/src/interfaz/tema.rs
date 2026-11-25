@@ -209,6 +209,13 @@ pub(super) fn vacio(ui: &mut egui::Ui, texto: &str) {
     ui.label(RichText::new(texto).size(11.5).color(paleta(ui).tenue));
 }
 
+/// En el celular los botones miden 40 de alto; en menús y listas desplegables
+/// quedan más bajos para que la lista quepa junto a su botón (en escritorio no cambia nada)
+pub(super) fn filas_chicas(ui: &mut egui::Ui) {
+    let alto = &mut ui.spacing_mut().interact_size.y;
+    *alto = alto.min(30.0);
+}
+
 /// "0,5 Hz", "10 Hz"
 pub(super) fn hz(f: f64) -> String {
     format!("{f} Hz").replace('.', ",")

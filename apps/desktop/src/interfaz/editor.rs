@@ -53,6 +53,21 @@ impl Interfaz {
         cabecera(ui, &self.nombre_archivo());
         // Un id por archivo: cada uno tiene su propio historial de deshacer
         let id = egui::Id::unique(("editor", self.proyecto.actual().nombre.as_str()));
+        // En el celular no hay teclado ni click derecho: Editar va a la vista, sobre el código.
+        // Con "Seleccionar" el dedo marca texto en vez de desplazar.
+        if self.movil {
+            ui.horizontal_wrapped(|ui| {
+                filas_chicas(ui);
+                ui.toggle_value(&mut self.seleccionar, "Seleccionar");
+                self.editar(ui);
+            });
+            ui.separator();
+        }
+        match plataforma::pegado(ui.ctx()) {
+            Some(Ok(texto)) => self.para_editor = Some(egui::Event::Paste(texto)),
+            Some(Err(e)) => self.aviso(e),
+            None => {}
+        }
         // Lo que pidió el menú Editar: se le da el foco al editor y se le pasa el evento
         if let Some(evento) = self.para_editor.take() {
             ui.memory_mut(|m| m.request_focus(id));
@@ -71,9 +86,10 @@ impl Interfaz {
             let alto = ui.text_style_height(&egui::TextStyle::Monospace);
             area = area.vertical_scroll_offset((linea as f32 - 4.0).max(0.0) * alto);
         }
-        // En el celular, arrastrar el dedo desplaza el código; si no, el editor selecciona texto
-        let arrastrando =
-            self.movil && ui.input(|i| i.any_touches() && i.pointer.is_decidedly_dragging());
+        // En el celular, arrastrar el dedo desplaza el código salvo con "Seleccionar"
+        let arrastrando = self.movil
+            && !self.seleccionar
+            && ui.input(|i| i.any_touches() && i.pointer.is_decidedly_dragging());
         if arrastrando {
             let dy = ui.input(|i| i.pointer.delta().y);
             area = area.vertical_scroll_offset((self.desplazado - dy).max(0.0));

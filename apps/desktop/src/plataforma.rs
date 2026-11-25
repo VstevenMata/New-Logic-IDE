@@ -21,6 +21,18 @@ pub type Leido = (Subido, bool);
 /// Por donde llegan los `.SA` leídos
 pub type Llegada = Sender<Leido>;
 
+/// Dónde deja `pegar` lo que leyó del portapapeles
+fn id_pegado() -> egui::Id {
+    egui::Id::unique("pegado")
+}
+
+/// Lo que leyó `pegar` (el texto o por qué no se pudo), cuando ya llegó
+pub fn pegado(ctx: &egui::Context) -> Option<Result<String, String>> {
+    // Va dentro de un Option: la memoria de egui pide tipos con valor por defecto
+    ctx.data_mut(|d| d.remove_temp::<Option<Result<String, String>>>(id_pegado()))
+        .flatten()
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub use escritorio::*;
 #[cfg(target_arch = "wasm32")]
@@ -80,10 +92,12 @@ mod escritorio {
         Ok(())
     }
 
-    pub fn pegar() -> Result<String, String> {
-        arboard::Clipboard::new()
+    /// Lee el portapapeles; se recoge con `pegado`
+    pub fn pegar(ctx: &egui::Context) {
+        let texto = arboard::Clipboard::new()
             .and_then(|mut p| p.get_text())
-            .map_err(|e| format!("No se pudo leer el portapapeles: {e}"))
+            .map_err(|e| format!("No se pudo leer el portapapeles: {e}"));
+        ctx.data_mut(|d| d.insert_temp(id_pegado(), Some(texto)));
     }
 }
 
@@ -162,8 +176,30 @@ mod web {
         Ok(())
     }
 
-    /// El navegador solo deja leer el portapapeles con el teclado
-    pub fn pegar() -> Result<String, String> {
-        Err("En el navegador, pega con Ctrl+V.".into())
+    /// Lee el portapapeles; llega después y se recoge con `pegado`.
+    /// Va dentro del toque en el botón: sin eso el navegador no deja leerlo
+    /// (en el iPhone aparece la burbuja "Pegar" para confirmar)
+    pub fn pegar(ctx: &egui::Context) {
+        let guardar = |ctx: &egui::Context, texto: Result<String, String>| {
+            ctx.data_mut(|d| d.insert_temp(id_pegado(), Some(texto)));
+            ctx.request_repaint();
+        };
+        let Some(ventana) = web_sys::window().filter(|w| w.is_secure_context()) else {
+            // Sin https el navegador no da el portapapeles
+            return guardar(
+                ctx,
+                Err("El navegador no deja leer el portapapeles aquí.".into()),
+            );
+        };
+        let promesa = ventana.navigator().clipboard().read_text();
+        let ctx = ctx.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let texto = wasm_bindgen_futures::JsFuture::from(promesa)
+                .await
+                .ok()
+                .and_then(|t| t.as_string())
+                .ok_or_else(|| "No se pudo leer el portapapeles (¿se dio permiso?).".to_string());
+            guardar(&ctx, texto);
+        });
     }
 }

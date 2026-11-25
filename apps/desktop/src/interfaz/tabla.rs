@@ -89,6 +89,7 @@ impl Interfaz {
             egui::ComboBox::from_id_salt("comparar")
                 .selected_text(self.comparar.as_deref().unwrap_or("-"))
                 .show_ui(ui, |ui| {
+                    filas_chicas(ui);
                     ui.selectable_value(&mut self.comparar, None, "-");
                     for a in &self.proyecto.archivos {
                         if a.nombre != archivo {
