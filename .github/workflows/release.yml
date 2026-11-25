@@ -87,12 +87,6 @@ jobs:
     needs: version
     if: needs.version.outputs.nuevo == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.desplegar.outputs.page_url }}
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -105,5 +99,19 @@ jobs:
       - uses: actions/upload-pages-artifact@v5
         with:
           path: dist
+
+  # Despliega en otro job: en el mismo, deploy-pages busca el paquete ~300 ms después de
+  # subirlo y GitHub todavía no lo lista (actions/deploy-pages#451). No usar "Re-run" del
+  # job fallido: falla con "Multiple artifacts"; correr el workflow de nuevo.
+  pages:
+    needs: web
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.desplegar.outputs.page_url }}
+    steps:
       - id: desplegar
         uses: actions/deploy-pages@v5
