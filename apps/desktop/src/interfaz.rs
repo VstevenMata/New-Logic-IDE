@@ -163,6 +163,8 @@ pub struct Interfaz {
     parte: Vista,
     /// Cuánto está desplazado el código (para moverlo con el dedo en el celular)
     desplazado: f32,
+    /// En el celular, el dedo selecciona texto en el código en vez de desplazarlo
+    seleccionar: bool,
     ventana: Option<Ventana>,
     /// Acción esperando confirmación porque hay cambios sin guardar
     confirmar: Option<Accion>,
@@ -320,6 +322,7 @@ impl Interfaz {
             movil: false,
             parte: Vista::Codigo,
             desplazado: 0.0,
+            seleccionar: false,
             ventana: None,
             confirmar: None,
             borrar: None,

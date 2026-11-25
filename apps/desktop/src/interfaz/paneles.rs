@@ -69,7 +69,10 @@ impl Interfaz {
         ui.horizontal_centered(|ui| {
             ui.image((self.logo.id(), vec2(22.0, 22.0)));
             if movil {
-                ui.menu_button("Menú", |ui| self.menu(ui));
+                ui.menu_button("Menú", |ui| {
+                    filas_chicas(ui);
+                    self.menu(ui);
+                });
             } else {
                 ui.label(RichText::new("LogicSM").size(14.0).strong());
                 ui.add_space(6.0);
@@ -115,7 +118,9 @@ impl Interfaz {
             egui::ComboBox::from_id_salt("frecuencia")
                 .width(if movil { 58.0 } else { 70.0 })
                 .selected_text(hz(self.frecuencia))
+                .height(400.0)
                 .show_ui(ui, |ui| {
+                    filas_chicas(ui);
                     for f in FRECUENCIAS {
                         ui.selectable_value(&mut self.frecuencia, f, hz(f));
                     }
@@ -183,15 +188,8 @@ impl Interfaz {
             ui.add(egui::Button::new(texto).shortcut_text(atajo(a)))
                 .clicked()
         };
-        let tecla = |key| egui::Event::Key {
-            key,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::COMMAND,
-        };
-
         ui.menu_button("Archivo", |ui| {
+            filas_chicas(ui);
             if opcion(ui, "Nuevo proyecto…", "Ctrl+N") {
                 self.pedir(&ctx, Accion::Nuevo);
             }
@@ -211,7 +209,10 @@ impl Interfaz {
             if opcion(ui, "Guardar como…", "Ctrl+Shift+S") {
                 self.guardar(true);
             }
-            ui.menu_button("Exportar", |ui| self.exportar(ui));
+            ui.menu_button("Exportar", |ui| {
+                filas_chicas(ui);
+                self.exportar(ui);
+            });
             ui.separator();
             if !self.sin_proyecto && opcion(ui, "Cerrar proyecto", "") {
                 self.pedir(&ctx, Accion::Cerrar);
@@ -221,40 +222,11 @@ impl Interfaz {
             }
         });
         ui.menu_button("Editar", |ui| {
-            // Deshace en el lienzo si lo último fue mover piezas; si no, en el editor
-            if opcion(ui, "Deshacer", "Ctrl+Z") {
-                if self.ultimo_lienzo {
-                    self.mover(false);
-                } else {
-                    self.para_editor = Some(tecla(egui::Key::Z));
-                }
-            }
-            if opcion(ui, "Rehacer", "Ctrl+Y") {
-                if self.ultimo_lienzo {
-                    self.mover(true);
-                } else {
-                    self.para_editor = Some(tecla(egui::Key::Y));
-                }
-            }
-            ui.separator();
-            if opcion(ui, "Cortar", "Ctrl+X") {
-                self.para_editor = Some(egui::Event::Cut);
-            }
-            if opcion(ui, "Copiar", "Ctrl+C") {
-                self.para_editor = Some(egui::Event::Copy);
-            }
-            if opcion(ui, "Pegar", "Ctrl+V") {
-                match plataforma::pegar() {
-                    Ok(texto) => self.para_editor = Some(egui::Event::Paste(texto)),
-                    Err(e) => self.aviso(e),
-                }
-            }
-            ui.separator();
-            if opcion(ui, "Seleccionar todo", "Ctrl+A") {
-                self.para_editor = Some(tecla(egui::Key::A));
-            }
+            filas_chicas(ui);
+            self.editar(ui);
         });
         ui.menu_button("Ver", |ui| {
+            filas_chicas(ui);
             // Igual que en VS Code, el zoom es de toda la ventana
             if opcion(ui, "Acercar", "Ctrl++") {
                 ctx.set_zoom_factor((ctx.zoom_factor() + 0.1).min(3.0));
@@ -271,6 +243,7 @@ impl Interfaz {
             ui.checkbox(&mut self.ver_inferior, "Panel inferior  (Ctrl+J)");
         });
         ui.menu_button("Simulación", |ui| {
+            filas_chicas(ui);
             let hay = self.hay_reloj();
             let texto = if self.corriendo { "Pausa" } else { "Ejecutar" };
             if ui
@@ -306,6 +279,7 @@ impl Interfaz {
             }
         });
         ui.menu_button("Ayuda", |ui| {
+            filas_chicas(ui);
             if opcion(ui, "Guía del lenguaje", "F1") {
                 self.ventana = Some(Ventana::Guia);
             }
@@ -333,11 +307,62 @@ impl Interfaz {
 
     /// Circuitos clásicos que se agregan al proyecto (menú Ayuda y panel Proyecto)
     pub(super) fn lista_de_ejemplos(&mut self, ui: &mut egui::Ui) {
+        filas_chicas(ui);
         ui.add_enabled(false, egui::Label::new("Se agregan al proyecto:"));
-        for (titulo, archivos) in ayuda::EJEMPLOS {
-            if ui.button(*titulo).clicked() {
-                self.agregar_ejemplo(archivos);
+        // Los menús no se deslizan solos: en un celular acostado la lista no cabe
+        let alto = ui.ctx().content_rect().height() * 0.6;
+        egui::ScrollArea::vertical().max_height(alto).show(ui, |ui| {
+            for (titulo, archivos) in ayuda::EJEMPLOS {
+                if ui.button(*titulo).clicked() {
+                    self.agregar_ejemplo(archivos);
+                }
             }
+        });
+    }
+
+    /// Acciones de Editar: en el menú y, en el celular, en la barra sobre el código
+    pub(super) fn editar(&mut self, ui: &mut egui::Ui) {
+        let movil = self.movil;
+        let opcion = |ui: &mut egui::Ui, texto: &str, a: &str| {
+            ui.add(egui::Button::new(texto).shortcut_text(if movil { "" } else { a }))
+                .clicked()
+        };
+        let tecla = |key| egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        };
+        // Deshace en el lienzo si lo último fue mover piezas; si no, en el editor
+        if opcion(ui, "Deshacer", "Ctrl+Z") {
+            if self.ultimo_lienzo {
+                self.mover(false);
+            } else {
+                self.para_editor = Some(tecla(egui::Key::Z));
+            }
+        }
+        if opcion(ui, "Rehacer", "Ctrl+Y") {
+            if self.ultimo_lienzo {
+                self.mover(true);
+            } else {
+                self.para_editor = Some(tecla(egui::Key::Y));
+            }
+        }
+        ui.separator();
+        if opcion(ui, "Cortar", "Ctrl+X") {
+            self.para_editor = Some(egui::Event::Cut);
+        }
+        if opcion(ui, "Copiar", "Ctrl+C") {
+            self.para_editor = Some(egui::Event::Copy);
+        }
+        if opcion(ui, "Pegar", "Ctrl+V") {
+            // El texto llega después (el navegador lo lee aparte): lo recoge el editor
+            plataforma::pegar(ui.ctx());
+        }
+        ui.separator();
+        if opcion(ui, "Seleccionar todo", "Ctrl+A") {
+            self.para_editor = Some(tecla(egui::Key::A));
         }
     }
 
