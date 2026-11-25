@@ -3,7 +3,9 @@
 <html lang="es">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- viewport-fit=cover: la página ocupa toda la pantalla del iPhone y env(safe-area-inset-*)
+         dice cuánto tapan la barra de estado, las esquinas y la barra de inicio -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>LogicSM</title>
     <!-- wasm-opt -O4 solo en release: el .wasm más rápido. Se le dicen las funciones de
          wasm que Rust ya usa por defecto; sin eso, wasm-opt rechaza memory.fill y otras -->
@@ -24,7 +26,8 @@
     <link rel="icon" href="logo.png" />
     <link rel="apple-touch-icon" href="logo.png" />
     <link rel="manifest" href="manifest.webmanifest" />
-    <meta name="theme-color" content="#f8f8f5" />
+    <meta name="theme-color" content="#f8f8f5" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#1d201e" media="(prefers-color-scheme: dark)" />
     <script>
       if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js");
     </script>
@@ -38,6 +41,20 @@
         overflow: hidden;
         overscroll-behavior: none;
         background: #f8f8f5;
+      }
+      body {
+        /* La app dibuja solo dentro de la zona segura (eframe mide el canvas, no el body):
+           nada queda bajo la barra de estado ni lo cortan las esquinas del iPhone */
+        box-sizing: border-box;
+        padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+          env(safe-area-inset-left);
+      }
+      /* Las franjas de la zona segura con el fondo del tema que arranca (el del sistema) */
+      @media (prefers-color-scheme: dark) {
+        html,
+        body {
+          background: #1d201e;
+        }
       }
       canvas {
         display: block;
