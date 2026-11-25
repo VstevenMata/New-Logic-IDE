@@ -371,3 +371,22 @@ fn errores_de_buses() {
         ["`fa` tiene 4 circuitos: el índice 4 no existe (van de 0 a 3)"]
     );
 }
+
+#[test]
+fn un_circuito_exageradamente_grande_se_corta_a_tiempo() {
+    // Cada nivel usa dos veces al anterior: 2^30 compuertas si nada lo parara
+    let mut fuente = "circuit C0 { in A; out X; X = not(A); }".to_string();
+    for i in 1..=30 {
+        let p = i - 1;
+        fuente += &format!("circuit C{i} {{ in A; out X; a = C{p}(A); b = C{p}(a.X); X = b.X; }}");
+    }
+    let demasiado = |e: &Vec<String>| e.iter().any(|m| m.contains("demasiado grande"));
+    assert!(demasiado(&errores(&fuente)));
+    // Lo mismo con circuitos de puros cables, que no crean ningún nodo
+    let cables = fuente.replace("X = not(A);", "X = A;");
+    assert!(demasiado(&errores(&cables)));
+    // `for` anidados: 1024^3 vueltas
+    let anidados = "main { in A; out X; X = A;
+        for (i = 0; i < 1024; i++) { for (j = 0; j < 1024; j++) { for (k = 0; k < 1024; k++) { Y = A; } } } }";
+    assert!(demasiado(&errores(anidados)));
+}

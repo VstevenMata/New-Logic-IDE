@@ -22,7 +22,7 @@ jobs:
       tag: ${{ steps.leer.outputs.tag }}
       nuevo: ${{ steps.leer.outputs.nuevo }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: leer
         run: |
           # El primer "version =" de Cargo.toml es el de [workspace.package]
@@ -49,7 +49,7 @@ jobs:
           - { os: windows-latest, target: x86_64-pc-windows-msvc, archivo: logicsm-windows-x86_64.exe }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -60,7 +60,7 @@ jobs:
           origen=target/${{ matrix.target }}/release/logicsm
           if [ -f "$origen.exe" ]; then origen="$origen.exe"; fi
           cp "$origen" ${{ matrix.archivo }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.archivo }}
           path: ${{ matrix.archivo }}
@@ -70,7 +70,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Solo los ejecutables: sin el patrón también baja el paquete de la web (github-pages)
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: logicsm-*
           path: dist
@@ -94,7 +94,7 @@ jobs:
       name: github-pages
       url: ${{ steps.desplegar.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
@@ -102,8 +102,8 @@ jobs:
         run: curl -sSL https://github.com/trunk-rs/trunk/releases/latest/download/trunk-x86_64-unknown-linux-gnu.tar.gz | tar xz
       # Trunk.toml dice qué página compilar y que quede en dist/
       - run: ./trunk build --release --locked --public-url "/${{ github.event.repository.name }}/"
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: dist
       - id: desplegar
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

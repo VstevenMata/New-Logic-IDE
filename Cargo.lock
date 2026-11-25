@@ -1795,7 +1795,7 @@ checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 
 [[package]]
 name = "logicsm"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "arboard",
  "eframe",
@@ -1811,7 +1811,7 @@ dependencies = [
 
 [[package]]
 name = "logicsm-cli"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "logicsm-core",
  "logicsm-sim",
@@ -1819,11 +1819,11 @@ dependencies = [
 
 [[package]]
 name = "logicsm-core"
-version = "0.8.1"
+version = "0.8.2"
 
 [[package]]
 name = "logicsm-sim"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "logicsm-core",
 ]

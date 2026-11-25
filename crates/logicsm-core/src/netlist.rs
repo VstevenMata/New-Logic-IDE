@@ -134,6 +134,20 @@ struct Caja {
 /// Más vueltas de `for` o copias en un arreglo seguramente es un error de tipeo
 const MAXIMO: i64 = 1024;
 
+/// Nodos más copias de circuitos de toda la red: más allá la app deja de ir fluida. Arreglos y `for` anidados
+/// multiplican (1024 × 1024...) y se recompila con cada tecla.
+const MAX_NODOS: usize = 200_000;
+
+/// Error de un circuito que pasa de [`MAX_NODOS`]
+fn demasiado_grande(rango: Range<usize>) -> Error {
+    error(
+        format!(
+            "el circuito queda demasiado grande (más de {MAX_NODOS} compuertas e instancias); revisa los arreglos y los `for` anidados"
+        ),
+        rango,
+    )
+}
+
 fn error(mensaje: String, rango: Range<usize>) -> Error {
     Error { mensaje, rango }
 }
@@ -334,11 +348,16 @@ pub fn elaborar(principal: &Circuito, circuitos: &[Circuito]) -> Result<Netlist,
         }
     }
 
+    // Pasos máximos de `resolver`: sin ciclos se pasa por cada nombre una vez, más un
+    // `m.Salida` por cada uno. Se calcula una sola vez: dentro de `resolver` sumaba todos
+    // los ámbitos por cada entrada de cada nodo (cuadrático con muchas instancias).
+    let limite: usize = 2 * e.ambitos.iter().map(|a| a.senales.len() + 1).sum::<usize>();
+
     // Aquí se cierran los lazos de realimentación (Q = nor(R, Qn); Qn = nor(S, Q);)
     let pendientes = std::mem::take(&mut e.pendientes);
     for (i, fuentes) in pendientes.into_iter().enumerate() {
         for f in fuentes {
-            match e.resolver(f) {
+            match e.resolver(f, limite) {
                 Ok(id) => e.nodos[i].entradas.push(id),
                 Err(err) => e.agregar(err),
             }
@@ -349,7 +368,7 @@ pub fn elaborar(principal: &Circuito, circuitos: &[Circuito]) -> Result<Netlist,
     for caja in std::mem::take(&mut e.instancias) {
         let mut entradas = Vec::new();
         for (pin, f) in caja.entradas {
-            match e.resolver(f) {
+            match e.resolver(f, limite) {
                 Ok(id) => entradas.push((pin, id)),
                 Err(err) => e.agregar(err),
             }
@@ -358,7 +377,7 @@ pub fn elaborar(principal: &Circuito, circuitos: &[Circuito]) -> Result<Netlist,
         let salidas = caja
             .salidas
             .into_iter()
-            .filter_map(|(pin, f)| Some((pin, e.resolver(f).ok()?)))
+            .filter_map(|(pin, f)| Some((pin, e.resolver(f, limite).ok()?)))
             .collect();
         instancias.push(Instancia {
             nombre: caja.nombre,
@@ -423,6 +442,12 @@ impl<'a> Elaborador<'a> {
                 format!("`{}` se usa dentro de sí mismo", n.texto),
                 n.rango.clone(),
             ));
+            return None;
+        }
+        // Cada instancia pasa por aquí: al llegar al tope ya no se copian más. Cuentan
+        // también las copias: circuitos de puros cables no crean nodos.
+        if self.nodos.len() + self.ambitos.len() > MAX_NODOS {
+            self.agregar(demasiado_grande(n.rango.clone()));
             return None;
         }
         Some(c)
@@ -567,6 +592,11 @@ impl<'a> Elaborador<'a> {
                 continue;
             }
             for v in desde..hasta {
+                // `for` anidados multiplican sus vueltas
+                if planas.len() > MAX_NODOS {
+                    self.agregar(demasiado_grande(variable.rango.clone()));
+                    break;
+                }
                 vars.push((&variable.texto, v));
                 self.desenrollar(cuerpo, vars, planas);
                 vars.pop();
@@ -708,18 +738,17 @@ impl<'a> Elaborador<'a> {
         let mut suponer = false;
         while !pendientes.is_empty() {
             let antes = pendientes.len();
-            let mut i = 0;
-            while i < pendientes.len() {
-                let (n, valor, vars) = pendientes[i];
-                match self.ancho(id, valor, vars, suponer) {
+            // `retain` y no `remove(i)`: con miles de sentencias quitar de a una era cuadrático
+            pendientes.retain(
+                |&(n, valor, vars)| match self.ancho(id, valor, vars, suponer) {
                     Some(w) => {
                         let ancho = if w == 1 { None } else { Some(w) };
                         self.ambitos[id].anchos.entry(n.clone()).or_insert(ancho);
-                        pendientes.remove(i);
+                        false
                     }
-                    None => i += 1,
-                }
-            }
+                    None => true,
+                },
+            );
             suponer = pendientes.len() == antes;
         }
     }
@@ -1377,14 +1406,9 @@ impl<'a> Elaborador<'a> {
     }
 
     /// Sigue los nombres (`X = Y;`, entradas de instancias, `m.Suma`) hasta llegar a un nodo.
-    fn resolver(&self, mut r: Ref) -> Result<usize, Error> {
+    /// `limite`: pasos antes de decidir que es un lazo sin compuertas.
+    fn resolver(&self, mut r: Ref, limite: usize) -> Result<usize, Error> {
         let mut primero = None;
-        // Sin ciclos se pasa por cada nombre una vez, más un `m.Salida` por cada uno
-        let limite: usize = 2 * self
-            .ambitos
-            .iter()
-            .map(|a| a.senales.len() + 1)
-            .sum::<usize>();
         for _ in 0..=limite {
             r = match r {
                 Ref::Nodo(i) => return Ok(i),

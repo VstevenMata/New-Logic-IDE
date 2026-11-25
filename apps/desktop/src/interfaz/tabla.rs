@@ -16,8 +16,15 @@ impl Interfaz {
             vacio(ui, "Con más de 8 entradas la tabla sería demasiado larga.");
             return;
         }
-        // ponytail: se simula en cada cuadro; guardar la tabla si se nota lento
-        let tabla = Tabla::de(red, self.desde_reset);
+        // Simular las 2^n filas en cada cuadro trababa la app con circuitos grandes
+        let tabla = match &self.tabla {
+            Some((desde_reset, tabla)) if *desde_reset == self.desde_reset => tabla.clone(),
+            _ => {
+                let tabla = Tabla::de(red, self.desde_reset);
+                self.tabla = Some((self.desde_reset, tabla.clone()));
+                tabla
+            }
+        };
         let circuito = red.nombre.clone();
         let archivo = self.proyecto.actual().nombre.clone();
         let (filas, salidas) = (tabla.filas.len(), tabla.salidas.len());
@@ -95,7 +102,20 @@ impl Interfaz {
                 });
         });
         if let Some(otro) = &self.comparar {
-            let (texto, color) = match comparar(&self.proyecto, &tabla, otro, self.desde_reset) {
+            // Compila el otro archivo y simula su tabla: una vez, no en cada cuadro
+            let resultado = match &self.comparacion {
+                Some((desde_reset, archivo, r))
+                    if *desde_reset == self.desde_reset && archivo == otro =>
+                {
+                    r.clone()
+                }
+                _ => {
+                    let r = comparar(&self.proyecto, &tabla, otro, self.desde_reset);
+                    self.comparacion = Some((self.desde_reset, otro.clone(), r.clone()));
+                    r
+                }
+            };
+            let (texto, color) = match resultado {
                 Ok(texto) => (texto, c.uno),
                 Err(texto) => (texto, c.error),
             };
