@@ -105,6 +105,8 @@ const FRECUENCIAS: [f64; 8] = [0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0];
 const MAX_TICS: usize = 8;
 /// Muestras que guarda y dibuja cada sonda
 const MUESTRAS: usize = 48;
+/// Segundos sin escribir antes de recompilar
+const ESPERA_COMPILAR: f64 = 0.3;
 
 pub struct Interfaz {
     proyecto: Proyecto,
@@ -185,6 +187,9 @@ pub struct Interfaz {
     rehacer: Vec<Posiciones>,
     /// Lo último que se hizo fue mover piezas: Editar → Deshacer va al lienzo
     ultimo_lienzo: bool,
+    /// Momento (segundos de egui) en que recompilar lo escrito: se espera a que se deje
+    /// de escribir para no elaborar la red en cada tecla
+    compilar_en: Option<f64>,
     /// Línea a la que saltar en el editor (click en Problemas): (carácter, línea)
     ir_a: Option<(usize, usize)>,
     /// Donde está el lienzo en la ventana: lo que se recorta al exportar la imagen
@@ -329,6 +334,7 @@ impl Interfaz {
             deshacer: Vec::new(),
             rehacer: Vec::new(),
             ultimo_lienzo: false,
+            compilar_en: None,
             ir_a: None,
             rect_lienzo: Rect::NOTHING,
             elegir: None,
@@ -355,6 +361,7 @@ impl Interfaz {
     }
 
     fn compilar(&mut self) {
+        self.compilar_en = None;
         if self.sin_proyecto {
             self.red = None;
             self.problemas.clear();
@@ -960,6 +967,9 @@ impl eframe::App for Interfaz {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.atajos(&ctx);
+        if self.compilar_en.is_some_and(|t| ctx.input(|i| i.time) >= t) {
+            self.compilar();
+        }
         while let Ok(resultado) = self.captura.1.try_recv() {
             self.informar(resultado);
             self.cola_png.pop_front();

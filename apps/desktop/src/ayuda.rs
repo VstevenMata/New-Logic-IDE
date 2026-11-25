@@ -199,12 +199,13 @@ const LATCH_SR: (&str, &str) = (
     "LatchSR",
     "// Latch SR con NOR: la realimentación guarda un bit.
 // Enciende S y apágalo: Q se queda en 1. Enciende R y apágalo: Q vuelve a 0.
+// Qn va primero: con Reiniciar (todo en 0) gana la compuerta escrita primero y Q queda en 0.
 circuit LatchSR {
     in S, R;
     out Q, Qn;
 
-    Q  = nor(R, Qn);
     Qn = nor(S, Q);
+    Q  = nor(R, Qn);
 }
 ",
 );
@@ -221,6 +222,50 @@ circuit LatchD {
 
     Q  = sr.Q;
     Qn = sr.Qn;
+}
+",
+);
+
+const FLIP_FLOP_D: (&str, &str) = (
+    "FlipFlopD",
+    "// Flip-flop D maestro-esclavo: Q toma el valor de D solo en el flanco de subida
+// del reloj (cuando C pasa de 0 a 1). Usa el archivo LatchD.
+circuit FlipFlopD {
+    in D, C;
+    out Q, Qn;
+
+    maestro = LatchD(D, not(C));    // copia D mientras C = 0
+    esclavo = LatchD(maestro.Q, C); // lo pasa a Q cuando C = 1
+
+    Q  = esclavo.Q;
+    Qn = esclavo.Qn;
+}
+",
+);
+
+const CONTADOR: (&str, &str) = (
+    "Contador",
+    "// Contador de 0 a F: suma 1 en cada flanco de subida del reloj y lo muestra en
+// hexadecimal. Presiona Reiniciar (empieza en 0) y después Ejecutar o Paso a paso.
+// Usa el archivo FlipFlopD.
+circuit Contador {
+    clock CLK;
+    out Q[4];
+
+    // Q + 1: cada bit cambia cuando todos los de abajo están en 1
+    f0 = FlipFlopD(not(Q[0]), CLK);
+    f1 = FlipFlopD(xor(Q[1], Q[0]), CLK);
+    f2 = FlipFlopD(xor(Q[2], and(Q[0], Q[1])), CLK);
+    f3 = FlipFlopD(xor(Q[3], and(Q[0], Q[1], Q[2])), CLK);
+    Q[0] = f0.Q;
+    Q[1] = f1.Q;
+    Q[2] = f2.Q;
+    Q[3] = f3.Q;
+
+    // Los segmentos a-g (bit 0 = a) de cada dígito, guardados en una ROM
+    Hex = rom.size(4, 7, \"3F 06 5B 4F 66 6D 7D 07 7F 6F 77 7C 39 5E 79 71\");
+    s = Hex(Q);
+    display7 D(s, 0);
 }
 ",
 );
@@ -247,6 +292,10 @@ pub const EJEMPLOS: &[(&str, &[(&str, &str)])] = &[
     ("Generador de paridad", &[PARIDAD]),
     ("Latch SR (memoria)", &[LATCH_SR]),
     ("Latch D", &[LATCH_SR, LATCH_D]),
+    (
+        "Contador 0-F (reloj y display)",
+        &[LATCH_SR, LATCH_D, FLIP_FLOP_D, CONTADOR],
+    ),
 ];
 
 fn seccion(ui: &mut egui::Ui, texto: &str) {

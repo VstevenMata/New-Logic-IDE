@@ -110,7 +110,9 @@ impl Interfaz {
                         .show(ui);
                     if salida.response.changed() {
                         self.ultimo_lienzo = false;
-                        self.compilar();
+                        self.compilar_en = Some(ui.input(|i| i.time) + ESPERA_COMPILAR);
+                        ui.ctx()
+                            .request_repaint_after(Duration::from_secs_f64(ESPERA_COMPILAR));
                     }
 
                     // La línea del cursor va más fuerte. Una línea larga ocupa varias filas
@@ -341,6 +343,13 @@ impl Interfaz {
         if !self.estable {
             problemas.push(Problema::sin_lugar(
                 "El circuito oscila: nunca llega a un valor estable.".into(),
+            ));
+        } else if self.estado.valores.contains(&Valor::X) {
+            // Un lazo que arranca en X (flip-flop, oscilador) se queda en X y parece estable
+            problemas.push(Problema::sin_lugar(
+                "Hay señales en X (sin valor): un lazo de realimentación sin valor inicial o \
+                 tristate en conflicto. Reiniciar pone todo en 0."
+                    .into(),
             ));
         }
         let titulo_problemas = match problemas.len() {
