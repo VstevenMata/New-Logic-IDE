@@ -411,6 +411,31 @@ mod tests {
     }
 
     #[test]
+    fn el_contador_cuenta_desde_reiniciar() {
+        let red = ejemplo("Contador 0-F (reloj y display)");
+        let mut e = logicsm_sim::Estado::default();
+        e.reiniciar(&red);
+        // Salidas Q[0..3]: el bit 0 va primero
+        let cuenta = |e: &logicsm_sim::Estado| {
+            red.nodos
+                .iter()
+                .enumerate()
+                .filter(|(_, n)| matches!(n.tipo, logicsm_core::netlist::Tipo::Salida(_)))
+                .rev()
+                .fold(0, |c, (i, _)| {
+                    c * 2 + usize::from(e.valores[i].bit().unwrap())
+                })
+        };
+        assert!(logicsm_sim::simular(&red, &mut e, &[false]));
+        assert_eq!(cuenta(&e), 0);
+        for k in 1..=17 {
+            assert!(logicsm_sim::simular(&red, &mut e, &[true]));
+            assert!(logicsm_sim::simular(&red, &mut e, &[false]));
+            assert_eq!(cuenta(&e), k % 16, "flanco {k}");
+        }
+    }
+
+    #[test]
     fn circuitos_de_otros_archivos_y_errores_ubicados() {
         let mut p = Proyecto::nuevo();
         let sumador = crate::ayuda::EJEMPLOS
