@@ -15,7 +15,19 @@
       data-wasm-opt="4"
       data-wasm-opt-params="--enable-bulk-memory --enable-bulk-memory-opt --enable-nontrapping-float-to-int --enable-sign-ext --enable-mutable-globals --enable-reference-types --enable-multivalue"
     />
-    <link data-trunk rel="icon" href="../../assets/logo.png" />
+    <!-- PWA: se instala desde el navegador (Agregar a la pantalla de inicio) y abre sin internet.
+         copy-file deja los archivos sin hash, con el nombre que espera el manifiesto -->
+    <link data-trunk rel="copy-file" href="../../assets/logo.png" />
+    <link data-trunk rel="copy-file" href="web/logo-192.png" />
+    <link data-trunk rel="copy-file" href="web/manifest.webmanifest" />
+    <link data-trunk rel="copy-file" href="web/sw.js" />
+    <link rel="icon" href="logo.png" />
+    <link rel="apple-touch-icon" href="logo.png" />
+    <link rel="manifest" href="manifest.webmanifest" />
+    <meta name="theme-color" content="#f8f8f5" />
+    <script>
+      if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js");
+    </script>
     <style>
       html,
       body {
