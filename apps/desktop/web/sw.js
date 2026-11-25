@@ -4,7 +4,23 @@
 // borrarlas al activar si el espacio llega a importar.
 const CACHE = "logicsm";
 
-self.addEventListener("install", () => self.skipWaiting());
+// Al instalarse guarda ya la página y todo lo que enlaza (el .js y el .wasm con hash de
+// trunk): la primera carga pasa antes de que el service worker controle la página, así que
+// sin esto la app no abría sin internet hasta la segunda visita. En iPhone la app de la
+// pantalla de inicio tiene su propia caché, aparte de Safari.
+self.addEventListener("install", (e) => {
+  self.skipWaiting();
+  e.waitUntil(
+    (async () => {
+      const pagina = await fetch("./");
+      const html = await pagina.clone().text();
+      const enlaces = [...html.matchAll(/(?:href|src)="([^"]+)"/g)].map((m) => m[1]);
+      const cache = await caches.open(CACHE);
+      await cache.put("./", pagina);
+      await cache.addAll(enlaces);
+    })(),
+  );
+});
 self.addEventListener("activate", (e) => e.waitUntil(self.clients.claim()));
 
 self.addEventListener("fetch", (e) => {
@@ -18,6 +34,7 @@ self.addEventListener("fetch", (e) => {
         }
         return respuesta;
       })
-      .catch(() => caches.match(e.request).then((r) => r ?? Response.error())),
+      // ignoreSearch: el ícono puede abrir la página con "?algo" al final
+      .catch(() => caches.match(e.request, { ignoreSearch: true }).then((r) => r ?? Response.error())),
   );
 });
