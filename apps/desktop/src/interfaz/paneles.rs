@@ -311,13 +311,15 @@ impl Interfaz {
         ui.add_enabled(false, egui::Label::new("Se agregan al proyecto:"));
         // Los menús no se deslizan solos: en un celular acostado la lista no cabe
         let alto = ui.ctx().content_rect().height() * 0.6;
-        egui::ScrollArea::vertical().max_height(alto).show(ui, |ui| {
-            for (titulo, archivos) in ayuda::EJEMPLOS {
-                if ui.button(*titulo).clicked() {
-                    self.agregar_ejemplo(archivos);
+        egui::ScrollArea::vertical()
+            .max_height(alto)
+            .show(ui, |ui| {
+                for (titulo, archivos) in ayuda::EJEMPLOS {
+                    if ui.button(*titulo).clicked() {
+                        self.agregar_ejemplo(archivos);
+                    }
                 }
-            }
-        });
+            });
     }
 
     /// Acciones de Editar: en el menú y, en el celular, en la barra sobre el código

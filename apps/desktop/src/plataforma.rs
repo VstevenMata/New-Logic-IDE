@@ -29,7 +29,8 @@ fn id_pegado() -> egui::Id {
 /// Lo que leyó `pegar` (el texto o por qué no se pudo), cuando ya llegó
 pub fn pegado(ctx: &egui::Context) -> Option<Result<String, String>> {
     // Va dentro de un Option: la memoria de egui pide tipos con valor por defecto
-    ctx.data_mut(|d| d.remove_temp::<Option<Result<String, String>>>(id_pegado())).flatten()
+    ctx.data_mut(|d| d.remove_temp::<Option<Result<String, String>>>(id_pegado()))
+        .flatten()
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -185,7 +186,10 @@ mod web {
         };
         let Some(ventana) = web_sys::window().filter(|w| w.is_secure_context()) else {
             // Sin https el navegador no da el portapapeles
-            return guardar(ctx, Err("El navegador no deja leer el portapapeles aquí.".into()));
+            return guardar(
+                ctx,
+                Err("El navegador no deja leer el portapapeles aquí.".into()),
+            );
         };
         let promesa = ventana.navigator().clipboard().read_text();
         let ctx = ctx.clone();
