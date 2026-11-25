@@ -1,0 +1,15 @@
+{
+  "name": "LogicSM",
+  "short_name": "LogicSM",
+  "description": "Diseña y simula circuitos lógicos",
+  "lang": "es",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f8f8f5",
+  "theme_color": "#f8f8f5",
+  "icons": [
+    { "src": "logo-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "logo.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
