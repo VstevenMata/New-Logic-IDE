@@ -29,35 +29,43 @@ pub(super) fn invertida(c: Compuerta) -> bool {
 /// las salidas al final. `fuentes[i]` son las piezas que alimentan a `i`.
 // ponytail: dentro de cada columna van en orden de aparición, sin minimizar cruces
 pub(super) fn columnas(fuentes: &[Vec<usize>], salida: &[bool]) -> Vec<usize> {
-    fn profundidad(
-        i: usize,
-        fuentes: &[Vec<usize>],
-        col: &mut [Option<usize>],
-        visitando: &mut [bool],
-    ) -> usize {
-        if let Some(c) = col[i] {
-            return c;
-        }
-        if visitando[i] {
-            return 0; // realimentación: no empuja la columna
-        }
-        visitando[i] = true;
-        let c = fuentes[i]
-            .iter()
-            .map(|&f| profundidad(f, fuentes, col, visitando) + 1)
-            .max()
-            .unwrap_or(0);
-        visitando[i] = false;
-        col[i] = Some(c);
-        c
-    }
-
+    // Recorrido en profundidad con pila propia: con recursión, una cadena de miles de
+    // piezas desbordaba la pila (en el navegador es de ~1 MB).
     let total = fuentes.len();
-    let mut col = vec![None; total];
+    let mut col: Vec<Option<usize>> = vec![None; total];
     let mut visitando = vec![false; total];
-    let mut cols: Vec<usize> = (0..total)
-        .map(|i| profundidad(i, fuentes, &mut col, &mut visitando))
-        .collect();
+    for raiz in 0..total {
+        if col[raiz].is_some() {
+            continue;
+        }
+        // (pieza, siguiente fuente por mirar, columna hasta ahora)
+        let mut pila = vec![(raiz, 0, 0)];
+        visitando[raiz] = true;
+        while let Some(tope) = pila.last_mut() {
+            let (i, k) = (tope.0, tope.1);
+            if let Some(&f) = fuentes[i].get(k) {
+                tope.1 += 1;
+                match col[f] {
+                    Some(c) => tope.2 = tope.2.max(c + 1),
+                    // Realimentación: no empuja la columna
+                    None if visitando[f] => tope.2 = tope.2.max(1),
+                    None => {
+                        visitando[f] = true;
+                        pila.push((f, 0, 0));
+                    }
+                }
+            } else {
+                let c = tope.2;
+                pila.pop();
+                visitando[i] = false;
+                col[i] = Some(c);
+                if let Some(padre) = pila.last_mut() {
+                    padre.2 = padre.2.max(c + 1);
+                }
+            }
+        }
+    }
+    let mut cols: Vec<usize> = col.into_iter().map(|c| c.unwrap_or(0)).collect();
     let ultima = cols
         .iter()
         .zip(salida)

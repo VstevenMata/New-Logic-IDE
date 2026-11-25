@@ -100,9 +100,11 @@ impl Estado {
         self.flancos(red, false);
     }
 
-    /// Recalcula cada nodo al instante y en orden hasta que nada cambie
+    /// Recalcula cada nodo al instante y en orden hasta que nada cambie. Cada vuelta
+    /// recorre toda la red: con un lazo que nunca se asienta serían 4N vueltas de N
+    /// nodos. Lo que quede sin asentar sigue pendiente y lo termina `simular`.
     fn asentar(&mut self, red: &Netlist) {
-        for _ in 0..limite(red) {
+        for _ in 0..limite(red).min(256) {
             let mut cambio = false;
             for (i, nodo) in red.nodos.iter().enumerate() {
                 if con_retardo(&nodo.tipo) {

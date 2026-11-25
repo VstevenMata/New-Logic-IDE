@@ -99,8 +99,10 @@ const DESHACER: usize = 100;
 const SIN_RELOJ: &str = "Agrega un clock al circuito para usar el reloj.";
 /// Frecuencias del reloj del sistema que se pueden elegir, en Hz
 const FRECUENCIAS: [f64; 8] = [0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0];
-/// Medios ciclos que se simulan como mucho en un cuadro; si no alcanza, el reloj va más lento
-const MAX_TICS: usize = 1000;
+/// Medios ciclos que se simulan como mucho en un cuadro; si no alcanza, el reloj va más
+/// lento. A 100 Hz y 30 cuadros por segundo hacen falta 4: más solo alarga un cuadro lento,
+/// que acumula más medios ciclos para el siguiente.
+const MAX_TICS: usize = 8;
 /// Muestras que guarda y dibuja cada sonda
 const MUESTRAS: usize = 48;
 
@@ -121,6 +123,10 @@ pub struct Interfaz {
     comparar: Option<String>,
     /// La tabla de verdad parte desde Reset en vez de todo en X (útil con latches)
     desde_reset: bool,
+    /// Tabla de verdad ya simulada (con su `desde_reset`) y resultado de comparar con otro
+    /// archivo: se calculan una vez por red y no en cada cuadro
+    tabla: Option<(bool, Tabla)>,
+    comparacion: Option<(bool, String, Result<String, String>)>,
     /// Matrices de LEDs con cuadrados en vez de círculos (clave de la pieza), por archivo
     // ponytail: solo mientras la app está abierta; guardarlo en el .SA si se pide
     cuadradas: HashMap<String, HashSet<String>>,
@@ -129,6 +135,9 @@ pub struct Interfaz {
     /// Valor de cada nodo de `red`, memoria de los flip-flops y de las RAM
     estado: Estado,
     estable: bool,
+    /// Entradas con las que ya se vio que el circuito oscila: no se repiten los 4N pasos
+    /// de `simular` en cada cuadro hasta que algo cambie
+    oscila_con: Option<Vec<bool>>,
     /// El reloj del sistema está latiendo (Ejecutar)
     corriendo: bool,
     /// Frecuencia del reloj en Hz
@@ -285,10 +294,13 @@ impl Interfaz {
             esperado: HashMap::new(),
             comparar: None,
             desde_reset: false,
+            tabla: None,
+            comparacion: None,
             cuadradas: HashMap::new(),
             entradas: Vec::new(),
             estado: Estado::default(),
             estable: true,
+            oscila_con: None,
             corriendo: false,
             frecuencia: 1.0,
             reloj: false,
@@ -359,6 +371,9 @@ impl Interfaz {
                     .count();
                 self.entradas.resize(n, false);
                 self.estado = Estado::default();
+                self.oscila_con = None;
+                self.tabla = None;
+                self.comparacion = None;
                 self.ondas.clear();
                 self.avisos = entradas_sin_usar(&red);
                 self.red = Some(red);
@@ -615,9 +630,20 @@ impl Interfaz {
         self.entradas.fill(false);
         self.reloj = false;
         self.ondas.clear();
+        self.oscila_con = None;
         if let Some(red) = &self.red {
             self.estado.reiniciar(red);
         }
+    }
+
+    /// Simula con las entradas actuales hasta que nada cambie
+    fn simular(&mut self) {
+        let Some(red) = &self.red else { return };
+        if self.oscila_con.as_ref() == Some(&self.entradas) {
+            return;
+        }
+        self.estable = logicsm_sim::simular(red, &mut self.estado, &self.entradas);
+        self.oscila_con = (!self.estable).then(|| self.entradas.clone());
     }
 
     fn hay_reloj(&self) -> bool {
@@ -646,8 +672,7 @@ impl Interfaz {
     /// Con Ejecutar, da los medios ciclos que pasaron desde el último cuadro y
     /// simula después de cada uno
     fn latir(&mut self, ctx: &egui::Context) {
-        let Some(red) = &self.red else { return };
-        if !self.corriendo {
+        if self.red.is_none() || !self.corriendo {
             return;
         }
         let ahora = ctx.input(|i| i.time);
@@ -660,10 +685,16 @@ impl Interfaz {
             self.ultimo_tic += tics as f64 * medio;
         }
         for _ in 0..tics {
+            let Some(red) = &self.red else { return };
             self.reloj = !self.reloj;
             poner(red, &mut self.entradas, Clase::Reloj, self.reloj);
-            self.estable = logicsm_sim::simular(red, &mut self.estado, &self.entradas);
+            self.simular();
+            let Some(red) = &self.red else { return };
             muestrear(red, &self.estado.valores, &mut self.ondas, true);
+            // Si oscila, cada medio ciclo cuesta 4N pasos: el reloj espera al próximo cuadro
+            if !self.estable {
+                break;
+            }
         }
         let falta = (self.ultimo_tic + medio - ahora).max(0.0);
         ctx.request_repaint_after(Duration::from_secs_f64(falta));
@@ -938,7 +969,9 @@ impl eframe::App for Interfaz {
         self.latir(&ctx);
         if let Some(red) = &self.red {
             poner(red, &mut self.entradas, Clase::Reloj, self.reloj);
-            self.estable = logicsm_sim::simular(red, &mut self.estado, &self.entradas);
+            self.simular();
+        }
+        if let Some(red) = &self.red {
             muestrear(
                 red,
                 &self.estado.valores,
@@ -1096,6 +1129,20 @@ mod pruebas {
         insertar_declaracion(&mut codigo, "Not", &["A"]);
         assert_eq!(codigo, "main { in A; \n    not1 = Not(A);\n}");
         assert_eq!(insertar_declaracion(&mut String::new(), "X", &[]), None);
+    }
+
+    #[test]
+    fn columnas_con_realimentacion_y_cadena_larga() {
+        // 0 y 1 son entradas; 2 = f(0, 3) y 3 = f(1, 2) se realimentan; 4 es la salida
+        let fuentes = vec![vec![], vec![], vec![0, 3], vec![1, 2], vec![2]];
+        let salida = [false, false, false, false, true];
+        assert_eq!(columnas(&fuentes, &salida), [0, 0, 2, 1, 3]);
+        // Una cadena de 200 000 piezas no desborda la pila
+        let n: usize = 200_000;
+        let cadena: Vec<Vec<usize>> = (0..n)
+            .map(|i| i.checked_sub(1).into_iter().collect())
+            .collect();
+        assert_eq!(columnas(&cadena, &vec![false; n])[n - 1], n - 1);
     }
 
     #[test]
