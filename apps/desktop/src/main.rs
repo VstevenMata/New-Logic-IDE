@@ -18,6 +18,10 @@ pub const LOGO: &[u8] = include_bytes!("../../../assets/logo.png");
 /// Ícono de los proyectos `.SA` (el mismo que les pone el instalador en el sistema)
 pub const ICONO_SA: &[u8] = include_bytes!("../../../assets/archivo.png");
 
+/// Certificado de Rust del autor (Ayuda → Acerca de), uno por tema
+pub const CERTIFICADO_CLARO: &[u8] = include_bytes!("../../../assets/certificado-rust-claro.png");
+pub const CERTIFICADO_OSCURO: &[u8] = include_bytes!("../../../assets/certificado-rust-oscuro.png");
+
 // logicsm (o logicsm open) abre la ventana y logicsm Proyecto.SA abre ese proyecto (doble click
 // en el explorador); logicsm update | delete | help son comandos de terminal
 #[cfg(not(target_arch = "wasm32"))]

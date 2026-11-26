@@ -165,6 +165,8 @@ pub struct Interfaz {
     desplazado: f32,
     /// En el celular, el dedo selecciona texto en el código en vez de desplazarlo
     seleccionar: bool,
+    /// Última selección del editor (y de qué archivo): egui la borra al perder el foco
+    seleccion: Option<(egui::Id, egui::text::CCursorRange)>,
     ventana: Option<Ventana>,
     /// Acción esperando confirmación porque hay cambios sin guardar
     confirmar: Option<Accion>,
@@ -180,6 +182,8 @@ pub struct Interfaz {
     logo: egui::TextureHandle,
     /// Ícono de los proyectos `.SA` (Recientes)
     icono_sa: egui::TextureHandle,
+    /// Certificado de Rust (claro, oscuro): se carga al abrir "Acerca de" por primera vez
+    certificado: Option<(egui::TextureHandle, egui::TextureHandle)>,
     /// Parte del lienzo que se ve (zoom y desplazamiento), en coordenadas del circuito
     vista: Rect,
     /// Encuadrar el circuito en el próximo cuadro
@@ -280,17 +284,7 @@ impl Interfaz {
             // Primera vez: claro. Después egui recuerda el tema elegido.
             ctx.set_theme(Theme::Light);
         }
-        let textura = |nombre: &str, png: &[u8]| {
-            // Con `image` y no con eframe::icon_data, que no existe en el navegador
-            let icono = image::load_from_memory(png)
-                .expect("los PNG de assets son válidos")
-                .to_rgba8();
-            let imagen = egui::ColorImage::from_rgba_unmultiplied(
-                [icono.width() as usize, icono.height() as usize],
-                icono.as_raw(),
-            );
-            ctx.load_texture(nombre, imagen, egui::TextureOptions::LINEAR)
-        };
+        let textura = |nombre: &str, png: &[u8]| textura(ctx, nombre, png);
         let mut s = Self {
             proyecto: Proyecto::nuevo(),
             sin_proyecto: true,
@@ -323,6 +317,7 @@ impl Interfaz {
             parte: Vista::Codigo,
             desplazado: 0.0,
             seleccionar: false,
+            seleccion: None,
             ventana: None,
             confirmar: None,
             borrar: None,
@@ -332,6 +327,7 @@ impl Interfaz {
             para_editor: None,
             logo: textura("logo", crate::LOGO),
             icono_sa: textura("icono_sa", crate::ICONO_SA),
+            certificado: None,
             vista: Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0)),
             ajustar: true,
             deshacer: Vec::new(),
@@ -933,7 +929,17 @@ impl Interfaz {
                     Ventana::Guia => ayuda::guia(ui),
                     Ventana::Atajos => ayuda::atajos(ui),
                     Ventana::Actualizar => ayuda::actualizar(ui),
-                    Ventana::Acerca => ayuda::acerca(ui, &self.logo),
+                    Ventana::Acerca => {
+                        let (claro, oscuro) = self.certificado.get_or_insert_with(|| {
+                            (
+                                textura(ui.ctx(), "certificado_claro", crate::CERTIFICADO_CLARO),
+                                textura(ui.ctx(), "certificado_oscuro", crate::CERTIFICADO_OSCURO),
+                            )
+                        });
+                        let oscuro_activo = ui.ctx().theme() == Theme::Dark;
+                        let certificado = if oscuro_activo { oscuro } else { claro };
+                        ayuda::acerca(ui, &self.logo, certificado)
+                    }
                 });
         });
         if cerrar || r.should_close() {
@@ -1125,6 +1131,19 @@ fn insertar_declaracion(codigo: &mut String, circuito: &str, entradas: &[&str]) 
         codigo.insert_str(fin, &format!("\n    {linea}\n"));
     }
     Some(linea)
+}
+
+/// Sube un PNG de `assets` como textura. Con `image` y no con eframe::icon_data,
+/// que no existe en el navegador
+fn textura(ctx: &egui::Context, nombre: &str, png: &[u8]) -> egui::TextureHandle {
+    let icono = image::load_from_memory(png)
+        .expect("los PNG de assets son válidos")
+        .to_rgba8();
+    let imagen = egui::ColorImage::from_rgba_unmultiplied(
+        [icono.width() as usize, icono.height() as usize],
+        icono.as_raw(),
+    );
+    ctx.load_texture(nombre, imagen, egui::TextureOptions::LINEAR)
 }
 
 #[cfg(test)]
