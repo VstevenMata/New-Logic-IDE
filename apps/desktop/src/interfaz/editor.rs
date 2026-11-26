@@ -68,8 +68,22 @@ impl Interfaz {
             Some(Err(e)) => self.aviso(e),
             None => {}
         }
+        // Con el dedo, egui solo deja seleccionar arrastrando si el editor tiene el foco
+        if self.movil && self.seleccionar {
+            ui.memory_mut(|m| m.request_focus(id));
+        }
         // Lo que pidió el menú Editar: se le da el foco al editor y se le pasa el evento
         if let Some(evento) = self.para_editor.take() {
+            // Al tocar el botón el editor perdió el foco y egui dejó la selección en solo
+            // el cursor (Copiar no copiaba nada): se le devuelve la última que tuvo
+            if let Some((de, rango)) = self.seleccion
+                && de == id
+            {
+                let mut estado =
+                    egui::text_edit::TextEditState::load(ui.ctx(), id).unwrap_or_default();
+                estado.cursor.set_char_range(Some(rango));
+                estado.store(ui.ctx(), id);
+            }
             ui.memory_mut(|m| m.request_focus(id));
             ui.input_mut(|i| i.events.push(evento));
         }
@@ -124,6 +138,10 @@ impl Interfaz {
                         .layouter(&mut colores)
                         .interactive(!arrastrando)
                         .show(ui);
+                    // Solo hay rango mientras tiene el foco: se guarda para el menú Editar
+                    if let Some(rango) = salida.cursor_range {
+                        self.seleccion = Some((id, rango));
+                    }
                     if salida.response.changed() {
                         self.ultimo_lienzo = false;
                         self.compilar_en = Some(ui.input(|i| i.time) + ESPERA_COMPILAR);

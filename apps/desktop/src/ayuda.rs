@@ -562,7 +562,11 @@ pub fn actualizar(ui: &mut egui::Ui) {
     );
 }
 
-pub fn acerca(ui: &mut egui::Ui, logo: &TextureHandle) {
+/// Donde aprenderust.dev confirma que el certificado es auténtico
+pub const CERTIFICADO_URL: &str =
+    "https://aprenderust.dev/certificado/8a8ae32b-882e-410e-ae47-134b4e9d5995";
+
+pub fn acerca(ui: &mut egui::Ui, logo: &TextureHandle, certificado: &TextureHandle) {
     ui.vertical_centered(|ui| {
         ui.image((logo.id(), vec2(96.0, 96.0)));
         ui.add_space(6.0);
@@ -573,5 +577,17 @@ pub fn acerca(ui: &mut egui::Ui, logo: &TextureHandle) {
         ui.label("Licencia MIT o Apache-2.0.");
         ui.add_space(4.0);
         ui.hyperlink_to("Código fuente", env!("CARGO_PKG_REPOSITORY"));
+
+        ui.add_space(16.0);
+        ui.label(RichText::new("Hecho en Rust").size(15.0).strong());
+        ui.label("Su autor, Steven Mata Quirós, completó el curso Aprende Rust.");
+        ui.add_space(6.0);
+        ui.add(
+            egui::Image::new((certificado.id(), certificado.size_vec2()))
+                .max_width(ui.available_width())
+                .corner_radius(6),
+        );
+        ui.add_space(4.0);
+        ui.hyperlink_to("Ver el certificado en aprenderust.dev", CERTIFICADO_URL);
     });
 }

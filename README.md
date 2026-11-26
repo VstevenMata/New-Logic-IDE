@@ -11,6 +11,7 @@
 <p align="center">
   <a href="https://github.com/VstevenMata/logicsm/releases/latest"><img src="https://img.shields.io/github/v/release/VstevenMata/logicsm?label=versión" alt="Última versión"></a>
   <a href="#licencia"><img src="https://img.shields.io/badge/licencia-MIT%20%2F%20Apache--2.0-blue" alt="Licencia"></a>
+  <a href="#hecho-en-rust"><img src="https://img.shields.io/badge/hecho%20en-Rust-orange?logo=rust" alt="Hecho en Rust"></a>
 </p>
 
 ---
@@ -78,6 +79,23 @@ En desarrollo. El lenguaje, el simulador y las herramientas educativas ya funcio
 
 - [Diseño del lenguaje y la arquitectura](docs/DISENO.md)
 - [Guía para desarrolladores](COMANDOS.md)
+
+## Hecho en Rust
+
+LogicSM está escrito por completo en Rust. Su autor, Steven Mata Quirós, completó el curso [Aprende Rust](https://aprenderust.dev) (26 lecciones, 95 ejercicios y 7 exámenes).
+
+<p align="center">
+  <a href="https://aprenderust.dev/certificado/8a8ae32b-882e-410e-ae47-134b4e9d5995">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="assets/certificado-rust-oscuro.png">
+      <img src="assets/certificado-rust-claro.png" alt="Certificado Aprende Rust de Steven Mata Quirós" width="700">
+    </picture>
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://aprenderust.dev/certificado/8a8ae32b-882e-410e-ae47-134b4e9d5995">Ver el certificado en aprenderust.dev</a>
+</p>
 
 ## Licencia
 
